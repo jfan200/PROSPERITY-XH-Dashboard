@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>餐厅运营中心 | Melbourne Restaurant Dashboard</title>
+  <meta name="description" content="墨尔本餐厅实时运营仪表板 — 销售数据、摄像头监控一站式查看" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- ===== SIDEBAR ===== -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <div class="sidebar-logo">
+        <span class="sidebar-logo-icon">🍜</span>
+        <div class="sidebar-logo-text">
+          <span class="sidebar-store-name" id="store-name-sidebar">Melbourne Kitchen</span>
+          <span class="sidebar-store-sub">管理员</span>
+        </div>
+      </div>
+      <button class="sidebar-toggle" id="sidebar-toggle" onclick="toggleSidebar()" aria-label="收起侧栏">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <path d="M10 4L6 8L10 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+    </div>
+
+    <nav class="sidebar-nav">
+      <div class="nav-section-label">主要</div>
+      <a class="nav-item active" href="#" id="nav-dashboard" onclick="showPage('dashboard')">
+        <svg class="nav-icon" viewBox="0 0 20 20" fill="none"><rect x="2" y="2" width="7" height="7" rx="1.5" fill="currentColor" opacity=".7"/><rect x="11" y="2" width="7" height="7" rx="1.5" fill="currentColor" opacity=".7"/><rect x="2" y="11" width="7" height="7" rx="1.5" fill="currentColor" opacity=".7"/><rect x="11" y="11" width="7" height="7" rx="1.5" fill="currentColor" opacity=".7"/></svg>
+        <span>仪表板</span>
+      </a>
+      <a class="nav-item" href="#" id="nav-sales" onclick="showPage('sales')">
+        <svg class="nav-icon" viewBox="0 0 20 20" fill="none"><path d="M3 14L7.5 9L11 12.5L16 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 6H16V8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>销售报表</span>
+      </a>
+      <a class="nav-item" href="#" id="nav-cameras" onclick="showPage('cameras')">
+        <svg class="nav-icon" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="3" stroke="currentColor" stroke-width="1.5"/><path d="M17 7.5L14.5 9V11L17 12.5V7.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><rect x="3" y="6" width="11.5" height="8" rx="2" stroke="currentColor" stroke-width="1.5"/></svg>
+        <span>摄像头</span>
+        <span class="nav-badge" id="nav-cam-badge">4</span>
+      </a>
+
+      <div class="nav-divider"></div>
+      <div class="nav-section-label">数据</div>
+
+      <a class="nav-item" href="#" onclick="showPage('orders')">
+        <svg class="nav-icon" viewBox="0 0 20 20" fill="none"><path d="M5 3H15C15.5523 3 16 3.44772 16 4V17L13 15.5L10 17L7 15.5L4 17V4C4 3.44772 4.44772 3 5 3Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M7 7H13M7 10H11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        <span>今日订单</span>
+      </a>
+      <a class="nav-item" href="#" onclick="showPage('products')">
+        <svg class="nav-icon" viewBox="0 0 20 20" fill="none"><path d="M3 5H17M3 10H17M3 15H17" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        <span>热销菜品</span>
+      </a>
+
+      <div class="nav-divider"></div>
+      <div class="nav-section-label">系统</div>
+
+      <a class="nav-item" href="https://backoffice.taptouch.net" target="_blank">
+        <svg class="nav-icon" viewBox="0 0 20 20" fill="none"><rect x="3" y="3" width="14" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M7 7L13 7M7 10H13M7 13H10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        <span>TapTouch 后台</span>
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" style="margin-left:auto;opacity:0.4"><path d="M2 2H8V8M8 2L2 8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+      </a>
+      <a class="nav-item" href="#" onclick="showSettings()">
+        <svg class="nav-icon" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="3" stroke="currentColor" stroke-width="1.5"/><path d="M10 3V4M10 16V17M3 10H4M16 10H17M4.93 4.93L5.64 5.64M14.36 14.36L15.07 15.07M4.93 15.07L5.64 14.36M14.36 5.64L15.07 4.93" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        <span>设置</span>
+      </a>
+    </nav>
+
+    <!-- Sidebar Footer: Store Status -->
+    <div class="sidebar-footer">
+      <div class="store-status-card" id="store-status-card">
+        <div class="store-status-row">
+          <span class="status-dot-small"></span>
+          <span class="store-status-text" id="store-status-text">营业中</span>
+        </div>
+        <div class="store-time" id="sidebar-time">--:--</div>
+        <div class="store-date" id="sidebar-date"></div>
+      </div>
+      <div class="data-sync-row" id="data-sync-row">
+        <span class="sync-dot"></span>
+        <span id="sync-label">模拟数据模式</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ===== MAIN WRAPPER ===== -->
+  <div class="main-wrapper" id="main-wrapper">
+
+    <!-- ===== TOP BAR ===== -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <h1 class="page-title" id="page-title">仪表板</h1>
+        <span class="page-subtitle" id="page-subtitle">实时运营概览</span>
+      </div>
+      <div class="topbar-right">
+        <div class="topbar-date" id="topbar-date"></div>
+        <div class="topbar-time" id="topbar-time">--:--:--</div>
+        <button class="refresh-btn" onclick="refreshData()" title="重新渲染图表">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M12 7A5 5 0 1 1 7 2C8.38 2 9.65 2.52 10.6 3.4L12 2V6H8L9.5 4.5C8.85 3.85 7.97 3.5 7 3.5A3.5 3.5 0 1 0 10.5 7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          刷新
+        </button>
+        <button class="sync-taptouch-btn" id="sync-btn" onclick="triggerScrape()" title="从 TapTouch 后台抓取最新数据">
+          <svg class="sync-btn-icon" id="sync-btn-icon" width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M1 7A6 6 0 1 0 7 1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            <path d="M1 1v6h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span id="sync-btn-text">从 TapTouch 同步</span>
+        </button>
+        <div class="topbar-countdown" id="topbar-countdown">
+          <span id="countdown-text">60s</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- SCRAPE PROGRESS TOAST -->
+    <div class="scrape-toast" id="scrape-toast">
+      <div class="scrape-toast-inner">
+        <div class="scrape-spinner" id="scrape-spinner"></div>
+        <div class="scrape-toast-content">
+          <div class="scrape-toast-title" id="scrape-toast-title">正在从 TapTouch 获取数据...</div>
+          <div class="scrape-toast-log" id="scrape-toast-log">启动中...</div>
+        </div>
+        <button class="scrape-toast-close" onclick="hideScrapeToast()">✕</button>
+      </div>
+    </div>
+
+    <!-- ===== PAGE: DASHBOARD ===== -->
+    <main class="page-content" id="page-dashboard">
+
+      <!-- CAMERAS ROW -->
+      <section class="cameras-row" id="cameras-row-section">
+        <div class="cameras-strip" id="cameras-strip">
+          <!-- Camera tiles injected by JS -->
+        </div>
+      </section>
+
+      <!-- CONTENT GRID -->
+      <div class="content-grid">
+
+        <!-- LEFT COLUMN: Charts -->
+        <div class="col-main">
+
+          <!-- KPI Row -->
+          <div class="kpi-row">
+            <div class="kpi-mini" id="kpi-revenue-mini">
+              <div class="kpi-mini-label">💰 今日销售额</div>
+              <div class="kpi-mini-value" id="kpi-rev-val">$0.00</div>
+              <div class="kpi-mini-change positive" id="kpi-rev-chg">+0%</div>
+            </div>
+            <div class="kpi-mini" id="kpi-orders-mini">
+              <div class="kpi-mini-label">📋 今日订单</div>
+              <div class="kpi-mini-value" id="kpi-ord-val">0 单</div>
+              <div class="kpi-mini-change positive" id="kpi-ord-chg">+0%</div>
+            </div>
+            <div class="kpi-mini" id="kpi-avg-mini">
+              <div class="kpi-mini-label">📊 平均客单价</div>
+              <div class="kpi-mini-value" id="kpi-avg-val">$0.00</div>
+              <div class="kpi-mini-change neutral" id="kpi-avg-chg">+0%</div>
+            </div>
+            <div class="kpi-mini" id="kpi-peak-mini">
+              <div class="kpi-mini-label">🔥 高峰时段</div>
+              <div class="kpi-mini-value kpi-mini-value--sm" id="kpi-peak-val">--:--</div>
+              <div class="kpi-mini-change neutral" id="kpi-peak-rev">$0</div>
+            </div>
+          </div>
+
+          <!-- Hourly Sales Chart -->
+          <div class="chart-card">
+            <div class="chart-card-header">
+              <div>
+                <div class="chart-card-title">每小时销售额 <span class="aud-badge">AUD</span></div>
+                <div class="chart-card-sub" id="chart-sub">今日营业数据，每分钟更新</div>
+              </div>
+              <div class="chart-type-btns">
+                <button class="ctype-btn active" id="btn-bar" onclick="switchChart('bar')">柱状</button>
+                <button class="ctype-btn" id="btn-line" onclick="switchChart('line')">折线</button>
+              </div>
+            </div>
+            <div class="chart-wrap">
+              <canvas id="sales-chart"></canvas>
+            </div>
+          </div>
+
+          <!-- Recent Orders Table -->
+          <div class="chart-card">
+            <div class="chart-card-header">
+              <div>
+                <div class="chart-card-title">最近订单</div>
+                <div class="chart-card-sub" id="dash-orders-sub">点击行查看详情</div>
+              </div>
+              <span class="live-badge"><span class="live-dot"></span>实时</span>
+            </div>
+            <div class="orders-table-wrap">
+              <table class="orders-table" id="orders-table">
+                <thead>
+                  <tr>
+                    <th>订单编号</th>
+                    <th>时间</th>
+                    <th>桌号</th>
+                    <th>金额</th>
+                    <th>状态</th>
+                  </tr>
+                </thead>
+                <tbody id="orders-tbody">
+                  <!-- Injected by JS -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- RIGHT COLUMN: Stats & info -->
+        <div class="col-side">
+
+          <!-- Revenue Donut -->
+          <div class="chart-card">
+            <div class="chart-card-header">
+              <div class="chart-card-title">销售来源</div>
+            </div>
+            <div class="donut-wrap">
+              <canvas id="source-chart"></canvas>
+            </div>
+            <div class="donut-legend" id="donut-legend"></div>
+          </div>
+
+          <!-- Hourly Performance -->
+          <div class="chart-card">
+            <div class="chart-card-header">
+              <div class="chart-card-title">时段业绩</div>
+            </div>
+            <div class="perf-list" id="perf-list">
+              <!-- Injected by JS -->
+            </div>
+          </div>
+
+          <!-- Top Items -->
+          <div class="chart-card">
+            <div class="chart-card-header">
+              <div class="chart-card-title">🔥 热销菜品</div>
+            </div>
+            <div class="top-items" id="top-items">
+              <!-- Injected by JS -->
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+    </main>
+
+    <!-- ===== PAGE: CAMERAS FULL ===== -->
+    <main class="page-content hidden" id="page-cameras">
+      <div class="cameras-full-grid" id="cameras-full-grid">
+        <!-- Injected by JS -->
+      </div>
+      <div class="camera-setup-banner">
+        <div class="setup-banner-icon">🔧</div>
+        <div>
+          <strong>连接真实摄像头</strong>
+          <p>请在店内电脑安装 go2rtc，配置大华/DMSS RTSP 地址和小米摄像头后，在 app.js 中更新摄像头配置。</p>
+          <p style="margin-top:6px">大华 RTSP: <code>rtsp://admin:密码@摄像头IP:554/cam/realmonitor?channel=1&subtype=1</code></p>
+        </div>
+      </div>
+    </main>
+
+    <!-- ===== PAGE: SALES ===== -->
+    <main class="page-content hidden" id="page-sales">
+      <div class="chart-card" style="margin-bottom:20px">
+        <div class="chart-card-header">
+          <div class="chart-card-title">今日销售汇总</div>
+          <div class="chart-card-sub" id="sales-summary-sub">来自 TapTouch 实时数据</div>
+        </div>
+        <div id="sales-summary-cards" style="display:flex;gap:16px;flex-wrap:wrap;padding:16px 0"></div>
+        <div class="sales-insights-grid" id="sales-weekly-cards"></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-card-header">
+          <div>
+            <div class="chart-card-title">本周每日汇总</div>
+            <div class="chart-card-sub" id="sales-weekly-sub">最近 7 天销售额与订单量</div>
+          </div>
+        </div>
+        <div class="chart-wrap"><canvas id="weekly-chart"></canvas></div>
+      </div>
+      <div class="chart-card" style="margin-top:20px">
+        <div class="chart-card-header">
+          <div class="chart-card-title">每天分析</div>
+        </div>
+        <div class="sales-daily-breakdown" id="sales-daily-breakdown"></div>
+      </div>
+    </main>
+
+    <!-- ===== PAGE: ORDERS (FULL) ===== -->
+    <main class="page-content hidden" id="page-orders">
+      <div class="chart-card">
+        <div class="chart-card-header">
+          <div>
+            <div class="chart-card-title">今日全部订单</div>
+            <div class="chart-card-sub" id="orders-page-sub">点击任意行查看菜品详情</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <input id="order-search" type="text" placeholder="搜索订单号..."
+              oninput="filterOrders(this.value)"
+              style="background:var(--bg-card);border:1px solid var(--border);color:var(--text-1);border-radius:var(--radius-sm);padding:5px 10px;font-size:12px;width:160px;outline:none">
+            <span class="live-badge"><span class="live-dot"></span>实时</span>
+          </div>
+        </div>
+        <div class="orders-table-wrap">
+          <table class="orders-table" id="orders-page-table">
+            <thead><tr>
+              <th>订单号</th><th>来源</th><th>类型</th>
+              <th>时间</th><th>收银员</th><th>税</th><th>金额</th><th>状态</th>
+            </tr></thead>
+            <tbody id="orders-page-tbody">
+              <tr><td colspan="8" style="text-align:center;color:var(--text-3);padding:32px">请先点击从 TapTouch 同步</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+
+    <!-- ===== PAGE: PRODUCTS ===== -->
+    <main class="page-content hidden" id="page-products">
+      <div class="chart-card">
+        <div class="chart-card-header"><div class="chart-card-title">热销菜品排行</div></div>
+        <div id="products-list" style="padding:8px 0">
+          <div style="color:var(--text-3);font-size:12px;padding:24px;text-align:center">同步数据后显示</div>
+        </div>
+      </div>
+    </main>
+
+    <!-- ===== STATUS BAR ===== -->
+    <footer class="status-footer">
+      <span id="footer-data-source">数据来源: TapTouch (模拟模式)</span>
+      <span class="footer-div">|</span>
+      <span>下次刷新: <strong id="footer-countdown">60s</strong></span>
+      <span class="footer-div">|</span>
+      <span id="last-updated">最后更新: --</span>
+    </footer>
+
+  </div><!-- end main-wrapper -->
+
+  <!-- CAMERA MODAL -->
+  <div class="cam-modal" id="cam-modal" onclick="closeCamModal()">
+    <div class="cam-modal-inner" onclick="event.stopPropagation()">
+      <button class="cam-modal-close" onclick="closeCamModal()">✕</button>
+      <div class="cam-modal-title" id="cam-modal-title"></div>
+      <div class="cam-modal-body" id="cam-modal-body"></div>
+    </div>
+  </div>
+
+  <!-- ORDER DETAIL MODAL -->
+  <div class="cam-modal" id="order-modal" onclick="closeOrderModal()">
+    <div class="cam-modal-inner" onclick="event.stopPropagation()" style="max-width:560px;height:auto;max-height:80vh;overflow-y:auto;padding:24px">
+      <button class="cam-modal-close" onclick="closeOrderModal()">✕</button>
+      <div class="cam-modal-title" id="order-modal-title">订单详情</div>
+      <div id="order-modal-body" style="padding-top:16px">
+        <div style="text-align:center;color:var(--text-3);padding:32px">加载中...</div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+{
+  "name": "restaurant-dashboard",
+  "version": "1.0.0",
+  "description": "TapTouch-powered restaurant operations dashboard for PROSPERITY XH",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "scrape": "node scraper.js",
+    "test": "echo \"No automated tests configured\""
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "puppeteer": "^25.1.0"
+  }
+}

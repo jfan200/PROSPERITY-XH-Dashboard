@@ -1,0 +1,57 @@
+# go2rtc 摄像头配置
+# 文件路径: go2rtc.yaml
+# 官方文档: https://github.com/AlexxIT/go2rtc
+#
+# 使用方法:
+# 1. 下载 go2rtc: https://github.com/AlexxIT/go2rtc/releases
+# 2. 将此文件保存为 go2rtc.yaml（与 go2rtc 可执行文件同目录）
+# 3. 运行: ./go2rtc (macOS/Linux) 或 go2rtc.exe (Windows)
+# 4. Web 界面: http://localhost:1984
+
+api:
+  origin: "*"        # 允许跨域访问（Dashboard 需要）
+  listen: ":1984"
+
+# WebRTC 配置（远程访问需要）
+webrtc:
+  listen: ":8555"
+  # 如果需要从外网访问，添加 ICE 服务器：
+  ice_servers:
+    - urls: [stun:stun.l.google.com:19302]
+  # 如果你有公网 IP，取消注释以下行：
+  # candidates:
+  #   - 你的公网IP:8555   # 替换为你的公网IP
+
+# ============================================================
+# 摄像头配置 — 根据你的实际情况修改
+# ============================================================
+streams:
+
+  # --- 大华/DMSS 摄像头 ---
+  # 在摄像头 Web 界面 (通常 http://摄像头IP) 中：
+  # 1. 设置 → 网络 → 接入平台 → 启用 ONVIF
+  # 2. 系统 → 账户 → ONVIF 用户 → 创建用户
+  # 3. 记录摄像头 IP、用户名、密码
+  
+  front_counter:         # 前台收银摄像头
+    - "rtsp://admin:你的密码@192.168.1.100:554/cam/realmonitor?channel=1&subtype=1"
+    # subtype=1 使用子码流（低分辨率），减少带宽占用
+    # subtype=0 使用主码流（高分辨率）
+
+  kitchen:               # 厨房摄像头
+    - "rtsp://admin:你的密码@192.168.1.101:554/cam/realmonitor?channel=1&subtype=1"
+
+  entrance:              # 门口摄像头
+    - "rtsp://admin:你的密码@192.168.1.102:554/cam/realmonitor?channel=1&subtype=1"
+
+  # --- 小米摄像头 ---
+  # 小米新款摄像头不支持 RTSP，需要使用 go2rtc 的 Xiaomi Miot 集成
+  # 参考: https://github.com/AlexxIT/go2rtc/blob/master/README.md#source-homekit
+  #
+  # 方法1: 通过 Mi Home 账号（推荐）
+  # 需要先安装 ha-xiaomi-miot 或直接用 go2rtc + miot 协议
+  
+  dining_room:           # 用餐区小米摄像头
+    - "rtsp://admin:你的密码@192.168.1.103:554/ch0.h264"
+    # 如果以上不工作，尝试 Xiaomi P2P（需要 go2rtc v1.9+）：
+    # - "xiaomi://用户名:密码@摄像头DID?stream=0"
