@@ -10,13 +10,33 @@ const cors     = require('cors');
 const path     = require('path');
 const fs       = require('fs');
 const { spawn } = require('child_process');
-const { fetchSingleOrderDetail, parseReceiptDetail } = require('./scraper');
+const {
+  createSessionByLogin,
+  fetchCoreDataWithSession,
+  fetchOrdersForDateWithSession,
+  fetchSingleOrderDetailWithSession,
+  fetchOrdersForDate,
+  fetchSingleOrderDetail,
+  parseReceiptDetail,
+} = require('./scraper');
 
 const app  = express();
 const PORT = 3001;
+const COOKIE_REFRESH_MS = 30 * 60 * 1000;
+const AUTO_FETCH_MS = 5 * 60 * 1000;
+const DETAIL_PREFETCH_WORKERS = Math.max(1, Number(process.env.DETAIL_PREFETCH_WORKERS || 2));
 
 app.use(cors());
 app.use(express.json());
+
+// Disable caching for development
+app.use((req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  next();
+});
+
 app.use(express.static(path.join(__dirname)));
 
 // ============================================================
@@ -69,6 +89,73 @@ function formatRangeLabel(start, end) {
     return `${startMonth} ${start.getDate()} - ${end.getDate()}`;
   }
   return `${startMonth} ${start.getDate()} - ${endMonth} ${end.getDate()}`;
+}
+
+function getTodayDateKey(referenceDate = new Date()) {
+  return formatDateKey(referenceDate);
+}
+
+function isSummaryLikeOrder(order) {
+  const id = String(order?.id || '').trim();
+  const idKey = id.toLowerCase().replace(/[\s:]/g, '');
+  const txId = String(order?.txId || '').trim();
+  const amount = String(order?.amount || '').trim();
+
+  if (!id) return true;
+  if (/^(total|subtotal|grandtotal|合计|总计)$/i.test(idKey)) return true;
+
+  const hasRealTxId = /\d{6,}/.test(txId);
+  const hasMoney = /^\$?\d[\d,]*(\.\d+)?$/.test(amount.replace(/\s+/g, ''));
+  if (!hasRealTxId && !hasMoney) return true;
+
+  return false;
+}
+
+function mapRawOrdersToApiOrders(orders = [], orderDetails = {}) {
+  const mappedOrders = [];
+
+  for (const order of orders) {
+    if (!order) continue;
+    if (isSummaryLikeOrder(order)) continue;
+    const detailKey = order.txId || order.id;
+    mappedOrders.push({
+      id:           order.id       || '',
+      txId:         order.txId     || '',
+      source:       order.source   || '',
+      type:         order.type     || '',
+      date:         (order.date    || '').replace(/^\d{4}-\d{2}-\d{2} /, ''),
+      dateTime:     order.date     || '',
+      cashier:      order.cashier  || '-',
+      customer:     order.customer || '-',
+      tax:          order.tax      || '$0',
+      amount:       order.amount   || '$0',
+      status:       (order.status  || 'paid').toLowerCase(),
+      detailUrl:    order.detailUrl || '',
+      detailCached: !!(detailKey && orderDetails?.[detailKey]),
+    });
+  }
+
+  return mappedOrders;
+}
+
+function buildOrdersDataset(orders = [], meta = {}) {
+  const mappedOrders = mapRawOrdersToApiOrders(orders, cache.raw?.orderDetails || {});
+  const derivedDateKey = mappedOrders[0]?.dateTime?.slice(0, 10) || meta.dateKey || getTodayDateKey();
+  const totalRevenue = round2(mappedOrders.reduce((sum, order) => sum + parseMoneyValue(order.amount), 0));
+  const totalOrders = mappedOrders.length;
+
+  return {
+    dateKey: derivedDateKey,
+    label: meta.label || (derivedDateKey === getTodayDateKey() ? '今天' : derivedDateKey),
+    isToday: derivedDateKey === getTodayDateKey(),
+    source: meta.source || 'live',
+    fetchedAt: meta.fetchedAt || null,
+    totalOrders,
+    totalRevenue,
+    avgTicket: totalOrders > 0 ? round2(totalRevenue / totalOrders) : 0,
+    cachedDetails: mappedOrders.filter(order => order.detailCached).length,
+    orders: mappedOrders,
+  };
 }
 
 function extractOfflineChart(card = '') {
@@ -234,45 +321,33 @@ function parseTapTouchData(raw) {
   }
 
   // ── All orders from /store/report/orders (all pages) ────────
-  const recentOrders = [];
+  let recentOrders = [];
 
-  // New scraper format: raw allOrders array
   if (Array.isArray(raw.allOrders) && raw.allOrders.length > 0) {
-    for (const o of raw.allOrders) {
-      recentOrders.push({
-        id:       o.id       || '',
-        txId:     o.txId     || '',
-        source:   o.source   || '',
-        type:     o.type     || '',
-        date:     (o.date    || '').replace(/^\d{4}-\d{2}-\d{2} /, ''),
-        cashier:  o.cashier  || '-',
-        customer: o.customer || '-',
-        tax:      o.tax      || '$0',
-        amount:   o.amount   || '$0',
-        status:   (o.status  || 'paid').toLowerCase(),
-      });
-    }
-  }
-  // Fallback: old scraper format (firstRows from table)
-  else {
+    recentOrders = mapRawOrdersToApiOrders(raw.allOrders, raw.orderDetails);
+  } else {
     const ordersPage = (raw.scrapedPages || {})['/store/report'];
     if (ordersPage?.tables?.[0]?.firstRows) {
-      for (const row of ordersPage.tables[0].firstRows) {
-        recentOrders.push({
-          id:       row[0]  || '',
-          txId:     row[1]  || '',
-          source:   row[2]  || '',
-          type:     row[3]  || '',
-          date:     (row[4] || '').replace(/^\d{4}-\d{2}-\d{2} /, ''),
-          cashier:  row[5]  || '-',
-          customer: row[6]  || '-',
-          tax:      row[7]  || '$0',
-          amount:   row[8]  || '$0',
-          status:   (row[12] || 'paid').toLowerCase(),
-        });
-      }
+      recentOrders = mapRawOrdersToApiOrders(
+        ordersPage.tables[0].firstRows.map(row => ({
+          id: row[0] || '',
+          txId: row[1] || '',
+          source: row[2] || '',
+          type: row[3] || '',
+          date: row[4] || '',
+          cashier: row[5] || '-',
+          customer: row[6] || '-',
+          tax: row[7] || '$0',
+          amount: row[8] || '$0',
+          status: row[12] || 'paid',
+        })),
+        raw.orderDetails
+      );
     }
   }
+
+  const ordersDateKey = recentOrders[0]?.dateTime?.slice(0, 10)
+    || formatDateKey(parseLocalDateTime(raw.timestamp) || new Date());
 
   return {
     storeName:    'PROSPERITY XH',
@@ -283,11 +358,13 @@ function parseTapTouchData(raw) {
     hourlySales,
     payments,
     recentOrders,
+    ordersDateKey,
     weeklyOverview: buildWeeklyOverview(raw),
     syncState: raw.syncState || null,
     orderDetails: raw.orderDetails || {},
     salesReport:  raw.salesReport  || {},
     scrapedAt:    raw.timestamp,
+    products:     raw.products     || [],
   };
 }
 
@@ -296,9 +373,25 @@ function parseTapTouchData(raw) {
 // ============================================================
 let cache = { data: null, raw: null, lastUpdated: null, syncState: null };
 const inflightDetailFetches = new Map();
+const inflightDateFetches = new Map();
+const detailPrefetchQueue = [];
+const detailPrefetchQueuedSet = new Set();
+let detailPrefetchActive = 0;
+let tapTouchSession = null;
+let cookieRefreshPromise = null;
+const autoSyncState = {
+  cookieLastRefreshedAt: null,
+  dataLastFetchedAt: null,
+  running: false,
+  cookieRefreshing: false,
+  lastError: null,
+};
 
 function findOrderInRaw(raw, key) {
-  const pools = [raw?.allOrders, raw?.weeklyOrders];
+  const datedPools = Object.values(raw?.ordersByDate || {})
+    .map(entry => entry?.orders)
+    .filter(Array.isArray);
+  const pools = [raw?.allOrders, raw?.weeklyOrders, ...datedPools];
   for (const pool of pools) {
     if (!Array.isArray(pool)) continue;
     const found = pool.find(order => order.txId === key || order.id === key);
@@ -360,33 +453,358 @@ function persistOrderDetail(key, detail) {
   loadData();
 }
 
-async function getOrFetchOrderDetail(key) {
+function persistOrdersForDate(dateKey, entry) {
+  if (!cache.raw) cache.raw = {};
+  if (!cache.raw.ordersByDate) cache.raw.ordersByDate = {};
+  cache.raw.ordersByDate[dateKey] = entry;
+
+  const filePath = path.join(__dirname, 'scrape-result.json');
+  fs.writeFileSync(filePath, JSON.stringify(cache.raw, null, 2));
+  loadData();
+}
+
+function persistCoreSnapshotFromCookie(coreData, sourceLabel = 'URL+cookie 同步完成') {
+  if (!coreData) return;
+  if (!cache.raw) cache.raw = {};
+
+  const existingDetails = cache.raw.orderDetails || {};
+  const orders = Array.isArray(coreData.allOrders) ? coreData.allOrders : [];
+  const detailReady = orders.reduce((count, order) => {
+    const key = order?.txId || order?.id;
+    return key && existingDetails[key] ? count + 1 : count;
+  }, 0);
+  const detailTotal = orders.length;
+
+  cache.raw.timestamp = coreData.capturedAt || new Date().toISOString();
+  cache.raw.dashData = coreData.dashData || cache.raw.dashData || {};
+  cache.raw.weeklyDashData = coreData.weeklyDashData || cache.raw.weeklyDashData || {};
+  cache.raw.allOrders = orders;
+  cache.raw.weeklyOrders = Array.isArray(coreData.weeklyOrders) ? coreData.weeklyOrders : cache.raw.weeklyOrders || [];
+  cache.raw.orderDetails = existingDetails;
+  cache.raw.salesReport = cache.raw.salesReport || {};
+  cache.raw.ordersByDate = cache.raw.ordersByDate || {};
+  cache.raw.syncState = {
+    phase: 'complete',
+    message: `⚡ ${sourceLabel}`,
+    coreReady: true,
+    detailReady,
+    detailTotal,
+    detailFetchedThisRun: 0,
+    detailMissing: Math.max(detailTotal - detailReady, 0),
+    detailPercent: detailTotal > 0 ? Math.round((detailReady / detailTotal) * 100) : 100,
+    updatedAt: cache.raw.timestamp,
+  };
+
+  const filePath = path.join(__dirname, 'scrape-result.json');
+  fs.writeFileSync(filePath, JSON.stringify(cache.raw, null, 2));
+  loadData();
+  applyCacheSyncStateToScrapeStatus();
+}
+
+function getWeeklyOrdersForDate(dateKey) {
+  const targetDate = parseLocalDateTime(`${dateKey} 00:00:00`);
+  if (!targetDate || !Array.isArray(cache.raw?.weeklyOrders)) return null;
+
+  const referenceDate = parseLocalDateTime(cache.raw?.timestamp) || new Date();
+  const weekStart = startOfWeekMonday(referenceDate);
+  const weekEnd = new Date(weekStart);
+  weekEnd.setDate(weekStart.getDate() + 6);
+  weekEnd.setHours(23, 59, 59, 999);
+
+  if (targetDate < weekStart || targetDate > weekEnd) return null;
+  return cache.raw.weeklyOrders.filter(order => String(order.date || '').startsWith(dateKey));
+}
+
+async function refreshTapTouchSession(force = false) {
+  if (cookieRefreshPromise) return cookieRefreshPromise;
+
+  const sessionAge = tapTouchSession?.createdAt
+    ? Date.now() - new Date(tapTouchSession.createdAt).getTime()
+    : Infinity;
+  if (!force && tapTouchSession?.cookieHeader && sessionAge < COOKIE_REFRESH_MS) {
+    return tapTouchSession;
+  }
+
+  autoSyncState.cookieRefreshing = true;
+  cookieRefreshPromise = (async () => {
+    try {
+      const session = await createSessionByLogin({
+        sid: tapTouchSession?.sid || cache.raw?.dashData?.sid || cache.raw?.weeklyDashData?.sid || null,
+      });
+      tapTouchSession = session;
+      autoSyncState.cookieLastRefreshedAt = new Date().toISOString();
+      autoSyncState.lastError = null;
+      return session;
+    } finally {
+      autoSyncState.cookieRefreshing = false;
+      cookieRefreshPromise = null;
+    }
+  })();
+
+  return cookieRefreshPromise;
+}
+
+async function fetchOrdersForDateLive(dateKey) {
+  const sid = tapTouchSession?.sid || cache.raw?.dashData?.sid || cache.raw?.weeklyDashData?.sid || null;
+  let fetched = null;
+
+  if (tapTouchSession?.cookieHeader) {
+    try {
+      fetched = await fetchOrdersForDateWithSession(tapTouchSession, dateKey, { sid });
+    } catch (error) {
+      if (error.code === 'SESSION_EXPIRED' || error.code === 'SESSION_MISSING') {
+        await refreshTapTouchSession(true);
+        fetched = await fetchOrdersForDateWithSession(tapTouchSession, dateKey, { sid: tapTouchSession?.sid || sid });
+      } else {
+        throw error;
+      }
+    }
+  } else {
+    await refreshTapTouchSession(true);
+    fetched = await fetchOrdersForDateWithSession(tapTouchSession, dateKey, { sid: tapTouchSession?.sid || sid });
+  }
+
+  return fetched;
+}
+
+async function runAutoCookieSync(trigger = 'interval') {
+  if (autoSyncState.running || scrapeStatus.running) return false;
+  autoSyncState.running = true;
+
+  try {
+    await syncCoreDataWithCookie({
+      trigger,
+      ensureSession: true,
+      allowRelogin: true,
+    });
+    return true;
+  } catch (error) {
+    autoSyncState.lastError = error.message || 'Auto sync failed';
+    console.error('[Server] Auto cookie sync failed:', error.message);
+    return false;
+  } finally {
+    autoSyncState.running = false;
+  }
+}
+
+async function syncCoreDataWithCookie(options = {}) {
+  const trigger = options.trigger || 'manual';
+  const ensureSession = !!options.ensureSession;
+  const allowRelogin = !!options.allowRelogin;
+
+  if (ensureSession) {
+    await refreshTapTouchSession(false);
+  }
+  if (!tapTouchSession?.cookieHeader) {
+    const error = new Error('当前没有可用 cookie，请使用「从 TapTouch 同步」重新登录');
+    error.code = 'SESSION_MISSING';
+    throw error;
+  }
+
+  let coreData = null;
+  try {
+    coreData = await fetchCoreDataWithSession(tapTouchSession, { sid: tapTouchSession.sid });
+  } catch (error) {
+    const canRelogin = allowRelogin && (error.code === 'SESSION_EXPIRED' || error.code === 'SESSION_MISSING');
+    if (!canRelogin) throw error;
+    await refreshTapTouchSession(true);
+    coreData = await fetchCoreDataWithSession(tapTouchSession, { sid: tapTouchSession?.sid || null });
+  }
+
+  tapTouchSession.sid = coreData.sid || tapTouchSession.sid || null;
+  persistCoreSnapshotFromCookie(coreData, `URL+cookie ${trigger}刷新`);
+  autoSyncState.dataLastFetchedAt = new Date().toISOString();
+  autoSyncState.lastError = null;
+  return true;
+}
+
+async function runCookieRefreshNow() {
+  if (autoSyncState.running || scrapeStatus.running) {
+    const error = new Error('同步任务正在运行，请稍后再试');
+    error.code = 'SYNC_BUSY';
+    throw error;
+  }
+
+  autoSyncState.running = true;
+  try {
+    return await syncCoreDataWithCookie({
+      trigger: '手动',
+      ensureSession: false,
+      allowRelogin: false,
+    });
+  } finally {
+    autoSyncState.running = false;
+  }
+}
+
+async function getOrdersForDatePayload(dateKey) {
+  const todayKey = cache.data?.ordersDateKey || getTodayDateKey();
+  if (cache.data && dateKey === todayKey) {
+    return buildOrdersDataset(cache.raw?.allOrders || [], {
+      dateKey,
+      source: 'today_live',
+      fetchedAt: cache.data.scrapedAt || cache.lastUpdated,
+    });
+  }
+
+  const cachedDateEntry = cache.raw?.ordersByDate?.[dateKey];
+  if (Array.isArray(cachedDateEntry?.orders)) {
+    return buildOrdersDataset(cachedDateEntry.orders, {
+      dateKey,
+      source: 'date_cache',
+      fetchedAt: cachedDateEntry.fetchedAt || cache.lastUpdated,
+    });
+  }
+
+  const weeklyOrders = getWeeklyOrdersForDate(dateKey);
+  if (Array.isArray(weeklyOrders)) {
+    return buildOrdersDataset(weeklyOrders, {
+      dateKey,
+      source: 'weekly_cache',
+      fetchedAt: cache.raw?.timestamp || cache.lastUpdated,
+    });
+  }
+
+  if (inflightDateFetches.has(dateKey)) {
+    return inflightDateFetches.get(dateKey);
+  }
+
+  const promise = (async () => {
+    let fetched = null;
+    try {
+      fetched = await fetchOrdersForDateLive(dateKey);
+    } catch (error) {
+      fetched = await fetchOrdersForDate(dateKey, {
+        sid: cache.raw?.dashData?.sid || cache.raw?.weeklyDashData?.sid || null,
+      });
+    }
+
+    persistOrdersForDate(dateKey, {
+      orders: fetched.orders,
+      fetchedAt: fetched.fetchedAt,
+      sid: fetched.sid || null,
+    });
+
+    return buildOrdersDataset(fetched.orders, {
+      dateKey,
+      source: 'live_fetch',
+      fetchedAt: fetched.fetchedAt,
+    });
+  })();
+
+  inflightDateFetches.set(dateKey, promise);
+  try {
+    return await promise;
+  } finally {
+    inflightDateFetches.delete(dateKey);
+  }
+}
+
+function resolveOrderKey(rawOrder, fallbackKey = '') {
+  return rawOrder?.txId || rawOrder?.id || fallbackKey;
+}
+
+function normalizePrefetchKeys(keys = []) {
+  const normalized = [];
+  for (const key of keys) {
+    const trimmed = String(key || '').trim();
+    if (!trimmed) continue;
+    if (cache.data?.orderDetails?.[trimmed]) continue;
+    if (inflightDetailFetches.has(trimmed)) continue;
+    if (detailPrefetchQueuedSet.has(trimmed)) continue;
+    normalized.push(trimmed);
+  }
+  return normalized;
+}
+
+function enqueueDetailPrefetch(keys = [], options = {}) {
+  const normalized = normalizePrefetchKeys(keys);
+  if (!normalized.length) return 0;
+
+  if (options.highPriority) {
+    for (let i = normalized.length - 1; i >= 0; i -= 1) {
+      const key = normalized[i];
+      detailPrefetchQueue.unshift(key);
+      detailPrefetchQueuedSet.add(key);
+    }
+  } else {
+    for (const key of normalized) {
+      detailPrefetchQueue.push(key);
+      detailPrefetchQueuedSet.add(key);
+    }
+  }
+
+  scheduleDetailPrefetchWorkers();
+  return normalized.length;
+}
+
+function scheduleDetailPrefetchWorkers() {
+  while (detailPrefetchActive < DETAIL_PREFETCH_WORKERS && detailPrefetchQueue.length > 0) {
+    const key = detailPrefetchQueue.shift();
+    detailPrefetchQueuedSet.delete(key);
+    detailPrefetchActive += 1;
+
+    getOrFetchOrderDetail(key, { background: true })
+      .catch(() => null)
+      .finally(() => {
+        detailPrefetchActive = Math.max(0, detailPrefetchActive - 1);
+        scheduleDetailPrefetchWorkers();
+      });
+  }
+}
+
+async function getOrFetchOrderDetail(key, options = {}) {
   const cached = cache.data?.orderDetails?.[key];
   if (cached) return cached;
+
+  const rawOrder = findRawOrderByKey(key);
+  const canonicalKey = rawOrder?.txId || rawOrder?.id || key;
+  const canonicalCached = cache.data?.orderDetails?.[canonicalKey];
+  if (canonicalCached) return canonicalCached;
 
   if (inflightDetailFetches.has(key)) {
     return inflightDetailFetches.get(key);
   }
 
   const promise = (async () => {
-    const order = findRawOrderByKey(key);
+    const order = rawOrder;
     if (!order) {
       const error = new Error('Order not found');
       error.code = 404;
       throw error;
     }
 
-    const detail = await fetchSingleOrderDetail(order, {
-      sid: cache.raw?.dashData?.sid || cache.raw?.weeklyDashData?.sid || null,
-    });
+    const sid = cache.raw?.dashData?.sid || cache.raw?.weeklyDashData?.sid || null;
+    let detail = null;
+
+    if (tapTouchSession?.cookieHeader) {
+      try {
+        detail = await fetchSingleOrderDetailWithSession(tapTouchSession, order, { sid });
+      } catch (error) {
+        const shouldRelogin = error.code === 'SESSION_EXPIRED' || error.code === 'SESSION_MISSING';
+        if (shouldRelogin) {
+          await refreshTapTouchSession(true);
+          detail = await fetchSingleOrderDetailWithSession(tapTouchSession, order, {
+            sid: tapTouchSession?.sid || sid,
+          });
+        } else if (!options.background) {
+          console.error('[Server] Cookie receipt fetch failed, fallback to browser:', error.message);
+        }
+      }
+    }
+
+    if (!detail) {
+      detail = await fetchSingleOrderDetail(order, { sid });
+    }
+
     if (!detail) {
       const error = new Error('Detail fetch failed');
       error.code = 502;
       throw error;
     }
 
-    persistOrderDetail(order.txId || order.id || key, detail);
-    return cache.data?.orderDetails?.[order.txId || order.id || key] || detail;
+    persistOrderDetail(canonicalKey, detail);
+    return cache.data?.orderDetails?.[canonicalKey] || detail;
   })();
 
   inflightDetailFetches.set(key, promise);
@@ -407,6 +825,17 @@ app.get('/api/status', (req, res) => res.json({
   storeName:   cache.data?.storeName || 'Unknown',
   lastUpdated: cache.lastUpdated,
   scrapedAt:   cache.data?.scrapedAt || null,
+  autoSync: {
+    cookieLastRefreshedAt: autoSyncState.cookieLastRefreshedAt,
+    dataLastFetchedAt: autoSyncState.dataLastFetchedAt,
+    running: autoSyncState.running,
+    cookieRefreshing: autoSyncState.cookieRefreshing,
+    lastError: autoSyncState.lastError,
+  },
+  detailPrefetch: {
+    queueSize: detailPrefetchQueue.length,
+    activeWorkers: detailPrefetchActive,
+  },
 }));
 
 app.get('/api/sales/hourly', (req, res) => {
@@ -420,6 +849,7 @@ app.get('/api/sales/summary', (req, res) => {
   res.json({
     storeName:    d.storeName,
     brandName:    d.brandName,
+    ordersDateKey: d.ordersDateKey,
     totalRevenue: d.totalRevenue,
     totalOrders:  d.totalOrders,
     avgTicket:    d.avgTicket,
@@ -427,12 +857,42 @@ app.get('/api/sales/summary', (req, res) => {
     weeklyOverview: d.weeklyOverview,
     lastUpdated:  cache.lastUpdated,
     scrapedAt:    d.scrapedAt,
+    products:     d.products,
   });
 });
 
 app.get('/api/orders/recent', (req, res) => {
   if (!cache.data) return res.status(503).json({ error: 'No data' });
   res.json(cache.data.recentOrders);
+});
+
+app.get('/api/orders/by-date', async (req, res) => {
+  if (!cache.data) return res.status(503).json({ error: 'No data' });
+
+  const dateKey = String(req.query.date || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
+    return res.status(400).json({ error: 'Invalid date. Use YYYY-MM-DD.' });
+  }
+
+  try {
+    const payload = await getOrdersForDatePayload(dateKey);
+    res.json(payload);
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'Failed to load orders for date', dateKey });
+  }
+});
+
+app.post('/api/orders/prefetch', (req, res) => {
+  if (!cache.data) return res.status(503).json({ ok: false, error: 'No data' });
+
+  const keys = Array.isArray(req.body?.keys) ? req.body.keys : [];
+  const queued = enqueueDetailPrefetch(keys, { highPriority: false });
+  res.json({
+    ok: true,
+    queued,
+    queueSize: detailPrefetchQueue.length,
+    activeWorkers: detailPrefetchActive,
+  });
 });
 
 // Single order detail (items breakdown)
@@ -446,6 +906,75 @@ app.get('/api/orders/detail/:key', async (req, res) => {
   } catch (error) {
     const status = error.code || 500;
     res.status(status).json({ error: error.message || 'Detail not found', key });
+  }
+});
+
+// Proxy receipt web pages with cookies
+app.get('/api/receipt-proxy', async (req, res) => {
+  const { url } = req.query;
+  if (!url) {
+    return res.status(400).send('Missing url parameter');
+  }
+
+  try {
+    const headers = {
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    };
+    if (tapTouchSession?.cookieHeader) {
+      headers['Cookie'] = tapTouchSession.cookieHeader;
+    }
+
+    const response = await fetch(url, { headers });
+    if (!response.ok) {
+      return res.status(response.status).send(`Failed to fetch receipt: HTTP ${response.status}`);
+    }
+
+    let html = await response.text();
+    
+    const responsiveStyles = `
+<style>
+  html, body {
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    overflow-x: hidden !important;
+    box-sizing: border-box !important;
+    background: #ffffff !important;
+  }
+  * {
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+  }
+  div, table, section, article {
+    max-width: 100% !important;
+  }
+  /* Normalize centered POS print boxes to adapt to narrow screens */
+  .receipt, .receipt-container, .print-box, .paper, [class*="receipt"], [class*="print"], [class*="container"] {
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 auto !important;
+    padding: 12px !important;
+    box-shadow: none !important;
+    box-sizing: border-box !important;
+  }
+</style>
+    `;
+
+    const injectContent = `<base href="https://backoffice.taptouch.net/">` + responsiveStyles;
+    if (html.includes('<head>')) {
+      html = html.replace('<head>', '<head>' + injectContent);
+    } else if (html.includes('<HEAD>')) {
+      html = html.replace('<HEAD>', '<HEAD>' + injectContent);
+    } else {
+      html = injectContent + html;
+    }
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
+  } catch (error) {
+    console.error('[Receipt Proxy] Error:', error.message);
+    res.status(500).send(`Receipt proxy error: ${error.message}`);
   }
 });
 
@@ -501,6 +1030,27 @@ app.get('/api/scrape/status', (req, res) => res.json({
   lastUpdated: cache.lastUpdated,
 }));
 
+app.get('/api/auto-sync/status', (req, res) => res.json({
+  ...autoSyncState,
+  hasSession: !!tapTouchSession?.cookieHeader,
+  sessionCreatedAt: tapTouchSession?.createdAt || null,
+  sessionSid: tapTouchSession?.sid || null,
+}));
+
+app.post('/api/auto-sync/run', async (req, res) => {
+  try {
+    await runCookieRefreshNow();
+    res.json({ ok: true, message: '已使用当前 cookie 刷新数据' });
+  } catch (error) {
+    const status = error.code === 'SYNC_BUSY' ? 409 : 400;
+    res.status(status).json({
+      ok: false,
+      error: error.message || 'Cookie refresh failed',
+      needRelogin: error.code === 'SESSION_MISSING' || error.code === 'SESSION_EXPIRED',
+    });
+  }
+});
+
 app.post('/api/scrape/run', (req, res) => {
   if (scrapeStatus.running) {
     return res.json({ ok: false, message: '爬虫正在运行中，请稍候...' });
@@ -543,6 +1093,34 @@ app.post('/api/scrape/run', (req, res) => {
 // ============================================================
 const loaded = loadData();
 applyCacheSyncStateToScrapeStatus();
+
+setTimeout(() => {
+  refreshTapTouchSession(true).catch(error => {
+    autoSyncState.lastError = error.message || 'Cookie refresh failed';
+    console.error('[Server] Initial cookie refresh failed:', error.message);
+  });
+}, 1000);
+
+setTimeout(() => {
+  runAutoCookieSync('startup').catch(error => {
+    autoSyncState.lastError = error.message || 'Startup auto sync failed';
+    console.error('[Server] Startup auto sync failed:', error.message);
+  });
+}, 3000);
+
+setInterval(() => {
+  refreshTapTouchSession(true).catch(error => {
+    autoSyncState.lastError = error.message || 'Cookie refresh failed';
+    console.error('[Server] Cookie refresh failed:', error.message);
+  });
+}, COOKIE_REFRESH_MS);
+
+setInterval(() => {
+  runAutoCookieSync('interval').catch(error => {
+    autoSyncState.lastError = error.message || 'Auto sync failed';
+    console.error('[Server] Auto sync failed:', error.message);
+  });
+}, AUTO_FETCH_MS);
 
 // Auto-reload when scrape-result.json changes
 fs.watchFile(path.join(__dirname, 'scrape-result.json'), { interval: 3000 }, () => {

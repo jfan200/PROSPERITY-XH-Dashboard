@@ -25,6 +25,9 @@ webrtc:
 # ============================================================
 # 摄像头配置 — 根据你的实际情况修改
 # ============================================================
+xiaomi:
+  "2359592066": "V1:pwROAesIuzMBPe5slLSsQmZ5kdjdqiuJQm23J0SLdKJb0voiw5UVLaCTVJjbXPKxpBIWT1AS6QdOvp7kD9VdwvhR4Y2RYz1UmNE8kgclh9aPWkuVTRjv+DKqT/XbzdkeNHXTjTp8vO5XH1sUH6tLoZF3/ughgRY8/ug0e/GPArRUvB961u+rRjM2NOy0TQxDzsUFicMWyya62iZWeyC2Atv7mumPM5ey7LTN+BO5EG67AfUvWHU0re0/Avdw8HgymtZwclS90PLUxGruZkhIABzq9pc9wWupMds4CoYbhOo="
+
 streams:
 
   # --- 大华/DMSS 摄像头 ---
@@ -32,17 +35,17 @@ streams:
   # 1. 设置 → 网络 → 接入平台 → 启用 ONVIF
   # 2. 系统 → 账户 → ONVIF 用户 → 创建用户
   # 3. 记录摄像头 IP、用户名、密码
-  
-  front_counter:         # 前台收银摄像头
-    - "rtsp://admin:你的密码@192.168.1.100:554/cam/realmonitor?channel=1&subtype=1"
-    # subtype=1 使用子码流（低分辨率），减少带宽占用
-    # subtype=0 使用主码流（高分辨率）
-
-  kitchen:               # 厨房摄像头
-    - "rtsp://admin:你的密码@192.168.1.101:554/cam/realmonitor?channel=1&subtype=1"
-
-  entrance:              # 门口摄像头
-    - "rtsp://admin:你的密码@192.168.1.102:554/cam/realmonitor?channel=1&subtype=1"
+#
+#  front_counter:         # 前台收银摄像头
+#    - "rtsp://admin:你的密码@192.168.1.100:554/cam/realmonitor?channel=1&subtype=1"
+#    # subtype=1 使用子码流（低分辨率），减少带宽占用
+#    # subtype=0 使用主码流（高分辨率）
+#
+#  kitchen:               # 厨房摄像头
+#    - "rtsp://admin:你的密码@192.168.1.101:554/cam/realmonitor?channel=1&subtype=1"
+#
+#  entrance:              # 门口摄像头
+#    - "rtsp://admin:你的密码@192.168.1.102:554/cam/realmonitor?channel=1&subtype=1"
 
   # --- 小米摄像头 ---
   # 小米新款摄像头不支持 RTSP，需要使用 go2rtc 的 Xiaomi Miot 集成
@@ -52,6 +55,6 @@ streams:
   # 需要先安装 ha-xiaomi-miot 或直接用 go2rtc + miot 协议
   
   dining_room:           # 用餐区小米摄像头
-    - "rtsp://admin:你的密码@192.168.1.103:554/ch0.h264"
-    # 如果以上不工作，尝试 Xiaomi P2P（需要 go2rtc v1.9+）：
-    # - "xiaomi://用户名:密码@摄像头DID?stream=0"
+    # 小米云台2K通常不开放本地RTSP，改用 Xiaomi 协议（需要填真实 DID）
+    - "xiaomi://2359592066:cn@192.168.88.137?did=589141209&model=chuangmi.camera.029a02"
+    # stream=0 主码流，stream=1 子码流（更省带宽）

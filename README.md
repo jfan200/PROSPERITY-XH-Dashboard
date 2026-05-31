@@ -11,7 +11,8 @@
 - 本周历史分析：按 Mon-Sun 展示每天销售额、订单量、最佳营业日
 - 今日订单页：实时搜索、点击订单查看 Receipt 明细
 - Receipt 按需抓取：主同步先快，订单详情在需要时再抓并缓存
-- 摄像头位占位：支持后续接入 Xiaomi / Dahua/DMSS + go2rtc
+- 摄像头实时画面：已接入 Xiaomi 云台版2K（通过 go2rtc `dining_room` 流）
+- 主题模式：支持跟随系统 / 夜间 / 白天切换
 
 ## 项目结构
 
@@ -144,12 +145,49 @@ TapTouch 的订单详情实际是 Receipt 页面，不是普通表格页。
 | `TAPTOUCH_DETAIL_SAVE_EVERY` | 详情抓取中间保存频率 | `10` |
 | `TAPTOUCH_PREFETCH_DETAILS` | 是否在主同步时预抓全部详情 | `false` |
 
-## 摄像头接入
+## 摄像头接入（已实测）
 
-当前页面已经预留摄像头区域。  
-如果后续要接入真实监控流，推荐配合 [go2rtc](https://github.com/AlexxIT/go2rtc) 使用。
+当前 Dashboard 已接入一台 `Xiaomi 云台版2K`，流地址使用 go2rtc：
 
-`go2rtc.yaml` 已经放在项目里作为配置起点，你可以按自己的 RTSP 地址继续补全。
+```text
+http://localhost:1984/stream.html?src=dining_room
+```
+
+前端配置位置（[app.js](/Users/jinhua/Desktop/restaurant-dashboard/app.js)）：
+
+- `CONFIG.cameras[3].go2rtcUrl = "http://localhost:1984/stream.html?src=dining_room"`
+- `CONFIG.cameras[3].appOnly = false`
+
+go2rtc 推荐运行方式（示例）：
+
+```bash
+docker run -d --name go2rtc \
+  -p 1984:1984 -p 8554:8554 -p 8555:8555 \
+  -v /path/to/go2rtc.yaml:/config/go2rtc.yaml \
+  alexxit/go2rtc:latest
+```
+
+### Xiaomi 配置示例
+
+```yaml
+xiaomi:
+  "your_mi_id": "V1:your-token"
+
+streams:
+  dining_room:
+    - "xiaomi://your_mi_id:cn@192.168.88.137?did=YOUR_DID&model=chuangmi.camera.029a02&subtype=sd"
+```
+
+### 常见问题
+
+- `invalid port ":cn" after host`  
+  说明 URL 格式写错了（通常是 `xiaomi://...:cn` 的位置不对）。
+
+- `read udp ... i/o timeout`  
+  说明语法正确，但摄像头链路没回包。建议：
+  1. 先在米家 App 打开实时画面“唤醒”设备
+  2. 确认电脑、摄像头在同一局域网且关闭 AP 隔离
+  3. 重启 go2rtc 容器并重试 `dining_room` 流
 
 ## 技术栈
 
@@ -158,6 +196,47 @@ TapTouch 的订单详情实际是 Receipt 页面，不是普通表格页。
 - Backend: Node.js + Express
 - Scraper: Puppeteer
 - Data Source: TapTouch Backoffice
+
+## 框架建议
+
+当前项目是轻量架构（Vanilla JS + Express），对于单店运营看板是可用且维护成本低的方案。  
+现阶段不强制需要上 React/Vue 这类前端框架，除非你后续有这些需求：
+
+- 多角色、多页面复杂权限
+- 前端模块多人并行开发
+- 复杂状态管理和组件复用
+- 要做成 SaaS/多门店平台
+
+换句话说：你现在这版先稳定跑起来是正确路线。
+
+## 部署建议（生产）
+
+推荐拆分成 2 个角色：
+
+1. **数据与视频服务端（常开机器）**
+- 运行 `server.js`（Dashboard API）
+- 运行 `scraper.js`（TapTouch 同步）
+- 运行 `go2rtc`（摄像头流）
+
+2. **展示端（店内屏幕/安卓设备）**
+- 只打开 Dashboard 页面，不跑抓取和转码任务
+
+### 建议组件
+
+- 进程守护：`pm2`（保证 Node 服务崩溃后自动重启）
+- 反向代理：`nginx`（域名、HTTPS、转发）
+- 视频服务：`go2rtc`（Docker 运行）
+- 日志与备份：按天轮转日志，定时备份 `scrape-result.json`
+
+### 安卓点餐机是否可部署
+
+可以作为**展示端**使用，不建议作为后端主机。  
+原因是 Puppeteer 抓取与视频流转发在安卓设备上稳定性较差，容易影响点餐机本身业务。
+
+推荐方式：
+
+- 后端跑在店内常开主机/NAS/云服务器
+- 安卓点餐机开启 kiosk 模式，仅访问 Dashboard URL
 
 ## 注意事项
 
@@ -172,4 +251,5 @@ TapTouch 的订单详情实际是 Receipt 页面，不是普通表格页。
 - 增加按时间范围的历史报表
 - 增加商品维度、来源维度、时段维度的更细分析
 - 给订单详情增加“已缓存 / 加载中”状态提示
-- 给摄像头页接入真实视频流
+- 增加多路摄像头自动健康检查与断流重连提示
+- 增加部署脚本（PM2 + Nginx + Docker Compose）

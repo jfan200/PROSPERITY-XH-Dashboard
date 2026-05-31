@@ -47,10 +47,43 @@ const CREDS = {
 const BASE = 'https://backoffice.taptouch.net';
 const wait = ms => new Promise(r => setTimeout(r, ms));
 const MAX_ORDER_PAGES = 15;
+const ORDER_PAGE_SIZE = Math.max(25, Number(process.env.TAPTOUCH_ORDER_PAGE_SIZE || 1000));
 const DETAIL_CONCURRENCY = Math.max(1, Number(process.env.TAPTOUCH_DETAIL_CONCURRENCY || 4));
 const DETAIL_SAVE_EVERY = Math.max(1, Number(process.env.TAPTOUCH_DETAIL_SAVE_EVERY || 10));
+const DETAIL_PRIME_COUNT = Math.max(0, Number(process.env.TAPTOUCH_DETAIL_PRIME_COUNT || 8));
 const SCRAPE_RESULT_PATH = 'scrape-result.json';
 const PREFETCH_DETAILS = /^(1|true|yes)$/i.test(process.env.TAPTOUCH_PREFETCH_DETAILS || '');
+
+function decodeHtmlEntities(value) {
+  return String(value || '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
+function htmlToText(html) {
+  return decodeHtmlEntities(String(html || '')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim());
+}
+
+function extractSidFromUrl(url) {
+  try {
+    return new URL(url).searchParams.get('sid') || null;
+  } catch {
+    return null;
+  }
+}
+
+function extractChartBlockFromHtml(html) {
+  return String(html || '').match(/\$\(document\)\.ready\(function \(\) \{[\s\S]*?"label":"Offline Sales"[\s\S]*?\}\);/)?.[0] || '';
+}
 
 function formatQueryDate(date) {
   const pad = n => String(n).padStart(2, '0');
@@ -73,6 +106,18 @@ function getCurrentWeekRange(referenceDate = new Date()) {
   return { start, end };
 }
 
+function buildDayRange(dateKey) {
+  const match = String(dateKey || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) {
+    throw new Error(`Invalid date key: ${dateKey}`);
+  }
+
+  const [, year, month, day] = match;
+  const start = new Date(Number(year), Number(month) - 1, Number(day), 0, 0, 0, 0);
+  const end = new Date(Number(year), Number(month) - 1, Number(day), 23, 59, 59, 0);
+  return { start, end };
+}
+
 function buildOrdersReportUrl({ label, start, end } = {}) {
   const url = new URL(`${BASE}/store/report/orders`);
   if (label) url.searchParams.set('label', label);
@@ -90,12 +135,141 @@ function buildDashboardUrl({ label, start, end, sid } = {}) {
   return url.toString();
 }
 
+function buildProductReportUrl({ label, start, end, sid } = {}) {
+  const url = new URL(`${BASE}/store/report/product`);
+  if (sid) url.searchParams.set('sid', sid);
+  if (label) url.searchParams.set('label', label);
+  if (start) url.searchParams.set('startdt', formatQueryDate(start));
+  if (end) url.searchParams.set('enddt', formatQueryDate(end));
+  return url.toString();
+}
+
+function parseProductsFromHtml(html) {
+  const rowMatches = String(html || '').match(/<tr[\s\S]*?<\/tr>/gi) || [];
+  const products = [];
+
+  for (const rowHtml of rowMatches) {
+    const cells = (rowHtml.match(/<td[\s\S]*?<\/td>/gi) || [])
+      .map(cell => decodeHtmlEntities(
+        cell
+          .replace(/<br\s*\/?>/gi, ' ')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+      ));
+
+    if (cells.length < 3 || !cells[0] || isNaN(parseInt(cells[0]))) continue;
+
+    const name = cells[1] || '';
+    const qtyStr = cells[cells.length - 2] || '0';
+    const amountStr = cells[cells.length - 1] || '$0';
+
+    const qty = parseInt(qtyStr.replace(/,/g, '')) || 0;
+    const amount = parseFloat(amountStr.replace(/[$,]/g, '')) || 0.0;
+
+    if (!name || name.toLowerCase().includes('total') || name.toLowerCase().includes('summary')) continue;
+
+    products.push({
+      rank: parseInt(cells[0]) || (products.length + 1),
+      name,
+      qty,
+      amount,
+    });
+  }
+
+  return products.sort((a, b) => b.qty - a.qty);
+}
+
+function buildPagedReportUrl(url, pageNum, perPage = ORDER_PAGE_SIZE) {
+  const pageUrl = new URL(url);
+  pageUrl.searchParams.set('per_page', String(perPage));
+  pageUrl.searchParams.set('page', String(pageNum));
+  return pageUrl.toString();
+}
+
 function buildReceiptUrl(txId) {
   const url = new URL(`${BASE}/store/report/order/${txId}`);
   url.searchParams.set('cloud', '1');
   url.searchParams.set('process', '0');
   url.searchParams.set('modalframe', '1');
   return url.toString();
+}
+
+function isSummaryOrderRow(order) {
+  const id = String(order?.id || '').trim();
+  const idKey = id.toLowerCase().replace(/[\s:]/g, '');
+  const txId = String(order?.txId || '').trim();
+  const amount = String(order?.amount || '').trim();
+
+  if (!id) return true;
+  if (/^(total|subtotal|grandtotal|合计|总计)$/i.test(idKey)) return true;
+
+  const hasRealTxId = /\d{6,}/.test(txId);
+  const hasMoney = /^\$?\d[\d,]*(\.\d+)?$/.test(amount.replace(/\s+/g, ''));
+  if (!hasRealTxId && !hasMoney) return true;
+
+  return false;
+}
+
+function parseOrderRowsFromHtml(html) {
+  const rowMatches = String(html || '').match(/<tr[\s\S]*?<\/tr>/gi) || [];
+  const rows = [];
+
+  for (const rowHtml of rowMatches) {
+    const cells = (rowHtml.match(/<td[\s\S]*?<\/td>/gi) || [])
+      .map(cell => decodeHtmlEntities(
+        cell
+          .replace(/<br\s*\/?>/gi, ' ')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+      ));
+
+    if (cells.length < 9 || !cells[0]) continue;
+    const hrefMatch = rowHtml.match(/href="([^"]*\/store\/report\/order\/[^"]+)"/i);
+    const detailUrl = hrefMatch?.[1]
+      ? new URL(hrefMatch[1], BASE).toString()
+      : (cells[1] ? buildReceiptUrl(cells[1]) : '');
+
+    const parsedRow = {
+      id: cells[0] || '',
+      txId: cells[1] || '',
+      source: cells[2] || '',
+      type: cells[3] || '',
+      date: cells[4] || '',
+      cashier: cells[5] || '-',
+      customer: cells[6] || '-',
+      tax: cells[7] || '$0',
+      amount: cells[8] || '$0',
+      discount: cells[9] || '$0',
+      redeem: cells[10] || '$0',
+      rounding: cells[11] || '$0',
+      status: cells[12] || 'paid',
+      detailUrl,
+    };
+
+    if (isSummaryOrderRow(parsedRow)) continue;
+    rows.push(parsedRow);
+  }
+
+  return rows;
+}
+
+function hasNextOrdersPage(html, pageNum) {
+  const linkMatches = String(html || '').match(/href="[^"]*page=\d+[^"]*"/gi) || [];
+  const nextPage = pageNum + 1;
+  return linkMatches.some(link => {
+    const match = link.match(/page=(\d+)/i);
+    return match && Number(match[1]) === nextPage;
+  });
+}
+
+function getOrderLookupKeys(order) {
+  return Array.from(new Set([
+    order?.txId,
+    order?.id,
+    order?.receipt?.transactionId,
+  ].filter(Boolean).map(value => String(value).trim()).filter(Boolean)));
 }
 
 function normalizeReceiptText(value) {
@@ -270,21 +444,18 @@ function parseReceiptDetail(bodyText, order, url) {
 
 async function collectOrdersList(page, url, scopeLabel) {
   console.log(`[Scraper] Loading ${scopeLabel} orders list...`);
-  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-  await wait(2000);
-
-  try {
-    await page.select('select[name="orders_list_length"]', '100');
-    await wait(1500);
-  } catch {}
-
-  const orders = [];
+  const ordersByKey = new Map();
   let pageNum = 1;
+  let lastPageSignature = '';
 
   while (pageNum <= MAX_ORDER_PAGES) {
+    const pageUrl = buildPagedReportUrl(url, pageNum);
     console.log(`[Scraper] ${scopeLabel} orders page ${pageNum}...`);
-    const rows = await page.evaluate(() => {
-      return Array.from(document.querySelectorAll('table tbody tr')).map(row => {
+    await page.goto(pageUrl, { waitUntil: 'networkidle2', timeout: 45000 });
+    await wait(1500);
+
+    const { rows, nextPages } = await page.evaluate(() => {
+      const rows = Array.from(document.querySelectorAll('table tbody tr')).map(row => {
         const cells = Array.from(row.querySelectorAll('td')).map(td => td.innerText.trim());
         if (cells.length < 8 || !cells[0]) return null;
 
@@ -308,25 +479,263 @@ async function collectOrdersList(page, url, scopeLabel) {
           detailUrl,
         };
       }).filter(r => r && r.id && r.amount);
+
+      const nextPages = Array.from(document.querySelectorAll('a.page-link'))
+        .map(link => {
+          const href = link.getAttribute('href') || '';
+          if (!href || href.startsWith('javascript')) return null;
+          try {
+            const parsed = new URL(href, location.origin);
+            const targetPage = Number(parsed.searchParams.get('page'));
+            return Number.isFinite(targetPage) ? targetPage : null;
+          } catch {
+            return null;
+          }
+        })
+        .filter(Number.isFinite);
+
+      return { rows, nextPages };
     });
 
-    if (rows.length === 0) break;
-    orders.push(...rows);
-    console.log(`[Scraper] ${scopeLabel} page ${pageNum}: ${rows.length} orders (total: ${orders.length})`);
+    const dataRows = rows.filter(order => !isSummaryOrderRow(order));
+    if (dataRows.length === 0) break;
 
-    const hasNext = await page.evaluate(() => {
-      const btn = document.querySelector('#orders_list_next');
-      return btn && !btn.classList.contains('disabled');
-    });
-    if (!hasNext) break;
+    const pageSignature = dataRows.slice(0, 5).map(order => order.txId || order.id).join('|');
+    if (pageNum > 1 && pageSignature && pageSignature === lastPageSignature) break;
+    lastPageSignature = pageSignature;
 
-    await page.click('#orders_list_next');
-    await wait(1500);
+    let addedThisPage = 0;
+    for (const order of dataRows) {
+      const key = order.txId || order.id;
+      if (!key || ordersByKey.has(key)) continue;
+      ordersByKey.set(key, order);
+      addedThisPage++;
+    }
+
+    console.log(`[Scraper] ${scopeLabel} page ${pageNum}: ${dataRows.length} rows, +${addedThisPage} new (total: ${ordersByKey.size})`);
+
+    const hasNextPage = nextPages.includes(pageNum + 1);
+    if (!hasNextPage && dataRows.length < ORDER_PAGE_SIZE) break;
+    if (addedThisPage === 0) break;
+
     pageNum++;
   }
 
+  const orders = Array.from(ordersByKey.values());
   console.log(`[Scraper] ✅ ${scopeLabel} orders: ${orders.length}`);
   return orders;
+}
+
+async function collectOrdersListFromFetcher(fetchHtml, url, scopeLabel) {
+  console.log(`[Scraper] Loading ${scopeLabel} orders list via URL+cookie...`);
+  const ordersByKey = new Map();
+  let pageNum = 1;
+  let lastPageSignature = '';
+
+  while (pageNum <= MAX_ORDER_PAGES) {
+    const pageUrl = buildPagedReportUrl(url, pageNum);
+    const html = await fetchHtml(pageUrl);
+    const rows = parseOrderRowsFromHtml(html);
+    if (rows.length === 0) break;
+
+    const pageSignature = rows.slice(0, 5).map(order => order.txId || order.id).join('|');
+    if (pageNum > 1 && pageSignature && pageSignature === lastPageSignature) break;
+    lastPageSignature = pageSignature;
+
+    let addedThisPage = 0;
+    for (const order of rows) {
+      const key = order.txId || order.id;
+      if (!key || ordersByKey.has(key)) continue;
+      ordersByKey.set(key, order);
+      addedThisPage++;
+    }
+
+    console.log(`[Scraper] ${scopeLabel} page ${pageNum}: ${rows.length} rows, +${addedThisPage} new (total: ${ordersByKey.size})`);
+    const hasNextPage = hasNextOrdersPage(html, pageNum);
+    if (!hasNextPage && rows.length < ORDER_PAGE_SIZE) break;
+    if (addedThisPage === 0) break;
+    pageNum++;
+  }
+
+  const orders = Array.from(ordersByKey.values());
+  console.log(`[Scraper] ✅ ${scopeLabel} orders: ${orders.length}`);
+  return orders;
+}
+
+async function createSessionByLogin(options = {}) {
+  const browser = await puppeteer.launch({
+    headless: 'new',
+    args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu'],
+  });
+
+  try {
+    const page = await createWorkerPage(browser);
+    await loginToTapTouch(page);
+    const sid = await ensureStoreContext(page, options.sid || null);
+    const cookies = await page.cookies(BASE);
+    await page.close();
+
+    const cookieHeader = cookies
+      .filter(cookie => cookie?.name && cookie?.value)
+      .map(cookie => `${cookie.name}=${cookie.value}`)
+      .join('; ');
+
+    return {
+      sid: sid || null,
+      cookies,
+      cookieHeader,
+      createdAt: new Date().toISOString(),
+    };
+  } finally {
+    await browser.close();
+  }
+}
+
+async function fetchHtmlWithCookie(session, url) {
+  if (!session?.cookieHeader) {
+    const error = new Error('TapTouch session cookie is missing');
+    error.code = 'SESSION_MISSING';
+    throw error;
+  }
+
+  const response = await fetch(url, {
+    headers: {
+      'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'accept-language': 'en-AU,en;q=0.9,zh-CN;q=0.8',
+      'cache-control': 'no-cache',
+      'pragma': 'no-cache',
+      'cookie': session.cookieHeader,
+      'referer': `${BASE}/store/dashboard`,
+      'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120 Safari/537.36',
+    },
+    method: 'GET',
+    redirect: 'follow',
+  });
+
+  const html = await response.text();
+  const finalUrl = response.url || url;
+  const hasLoginForm = /<input[^>]+name=["']account["'][^>]*>/i.test(html)
+    && /<input[^>]+name=["']password["'][^>]*>/i.test(html);
+  const looksLoggedOut = hasLoginForm
+    || /\/auth(?:\/|["'])/i.test(finalUrl)
+    || (/login/i.test(finalUrl) && !/\/store\//i.test(finalUrl));
+
+  if (looksLoggedOut) {
+    const error = new Error('TapTouch session expired');
+    error.code = 'SESSION_EXPIRED';
+    throw error;
+  }
+
+  if (!response.ok) {
+    const error = new Error(`TapTouch fetch failed (${response.status})`);
+    error.code = 'HTTP_ERROR';
+    error.status = response.status;
+    throw error;
+  }
+
+  return { html, finalUrl, status: response.status };
+}
+
+async function fetchCoreDataWithSession(session, options = {}) {
+  const weekRange = getCurrentWeekRange();
+  const dashboardRes = await fetchHtmlWithCookie(
+    session,
+    buildDashboardUrl({ sid: session.sid || options.sid || null })
+  );
+  const sid = extractSidFromUrl(dashboardRes.finalUrl) || session.sid || options.sid || null;
+
+  const weeklyDashRes = await fetchHtmlWithCookie(session, buildDashboardUrl({
+    sid,
+    label: 'This Week',
+    start: weekRange.start,
+    end: weekRange.end,
+  }));
+
+  const productReportUrl = buildProductReportUrl({
+    sid,
+    label: 'Today',
+    start: new Date(new Date().setHours(0, 0, 0, 0)),
+    end: new Date(new Date().setHours(23, 59, 59, 999)),
+  });
+
+  const [todayOrders, weeklyOrders, productReportRes] = await Promise.all([
+    collectOrdersListFromFetcher(
+      async url => (await fetchHtmlWithCookie(session, url)).html,
+      buildOrdersReportUrl({}),
+      'today'
+    ),
+    collectOrdersListFromFetcher(
+      async url => (await fetchHtmlWithCookie(session, url)).html,
+      buildOrdersReportUrl({
+        label: 'This Week',
+        start: weekRange.start,
+        end: weekRange.end,
+      }),
+      'weekly'
+    ),
+    fetchHtmlWithCookie(session, productReportUrl),
+  ]);
+
+  const products = parseProductsFromHtml(productReportRes.html);
+
+  return {
+    capturedAt: new Date().toISOString(),
+    sid,
+    dashData: {
+      sid,
+      bodyText: htmlToText(dashboardRes.html).substring(0, 5000),
+      cards: [extractChartBlockFromHtml(dashboardRes.html)],
+    },
+    weeklyDashData: {
+      sid,
+      bodyText: htmlToText(weeklyDashRes.html).substring(0, 5000),
+      cards: [extractChartBlockFromHtml(weeklyDashRes.html)],
+    },
+    allOrders: todayOrders,
+    weeklyOrders,
+    products,
+  };
+}
+
+async function fetchOrdersForDateWithSession(session, dateKey, options = {}) {
+  const { start, end } = buildDayRange(dateKey);
+  const sid = session?.sid || options.sid || null;
+  const orders = await collectOrdersListFromFetcher(
+    async url => (await fetchHtmlWithCookie(session, url)).html,
+    buildOrdersReportUrl({ start, end }),
+    dateKey
+  );
+
+  return {
+    date: dateKey,
+    sid,
+    fetchedAt: new Date().toISOString(),
+    orders,
+  };
+}
+
+async function fetchSingleOrderDetailWithSession(session, order, options = {}) {
+  const sid = session?.sid || options.sid || null;
+  const candidateUrls = Array.from(new Set([
+    order?.detailUrl,
+    order?.txId ? buildReceiptUrl(order.txId) : null,
+  ].filter(Boolean)));
+
+  if (!candidateUrls.length) {
+    return null;
+  }
+
+  for (const detailUrl of candidateUrls) {
+    const response = await fetchHtmlWithCookie(session, detailUrl);
+    const bodyText = htmlToText(response.html);
+    if (!/Transaction Receipt|Receipt|Total Paid|Sub-Total/i.test(bodyText)) {
+      continue;
+    }
+
+    return parseReceiptDetail(bodyText, order, detailUrl);
+  }
+
+  return null;
 }
 
 function loadExistingResult() {
@@ -368,6 +777,7 @@ function buildResultSnapshot({
   weeklyOrders,
   orderDetails,
   syncState,
+  products,
 }) {
   return {
     loginSuccess: true,
@@ -379,6 +789,7 @@ function buildResultSnapshot({
     weeklyOrders,
     orderDetails,
     syncState,
+    products: products || [],
     apiCalls: [],
     scrapedPages: {
       '/store/report': {
@@ -486,52 +897,96 @@ async function fetchOrderDetail(page, order) {
 }
 
 async function fetchOrderDetailFromOrdersList(page, order) {
-  const lookupKey = order.txId || order.id;
-  if (!lookupKey) return null;
+  const lookupKeys = getOrderLookupKeys(order);
+  if (!lookupKeys.length) return null;
 
-  await page.goto(`${BASE}/store/report/orders`, { waitUntil: 'domcontentloaded', timeout: 45000 });
-  await wait(2000);
+  let receiptHref = '';
+  let rowFound = false;
+  const maxFallbackPages = Math.min(MAX_ORDER_PAGES, 4);
 
-  try {
-    await page.select('select[name="orders_list_length"]', '100');
+  for (let pageNum = 1; pageNum <= maxFallbackPages && !rowFound; pageNum++) {
+    await page.goto(buildPagedReportUrl(`${BASE}/store/report/orders`, pageNum), {
+      waitUntil: 'domcontentloaded',
+      timeout: 45000,
+    });
     await wait(1200);
-  } catch {}
 
-  try {
-    const searchSelector = '#orders_list_filter input';
-    await page.waitForSelector(searchSelector, { timeout: 5000 });
-    await page.click(searchSelector, { clickCount: 3 });
-    await page.keyboard.press('Backspace');
-    await page.type(searchSelector, lookupKey, { delay: 30 });
-    await wait(1200);
-  } catch {}
+    const rowHandle = await page.evaluateHandle((keys) => {
+      const rows = Array.from(document.querySelectorAll('table tbody tr'));
+      for (const row of rows) {
+        const rowText = (row.innerText || '').replace(/\s+/g, ' ').trim();
+        if (!keys.some(key => rowText.includes(key))) continue;
+        return row.querySelector('a[href*="/store/report/order/"]') || null;
+      }
+      return null;
+    }, lookupKeys);
 
-  const receiptHref = await page.evaluate((value) => {
-    const rows = Array.from(document.querySelectorAll('table tbody tr'));
-    const row = rows.find(currentRow => currentRow.innerText.includes(value));
-    return row?.querySelector('a')?.href || '';
-  }, lookupKey);
+    const rowLink = rowHandle.asElement();
+    if (!rowLink) {
+      await rowHandle.dispose();
+      continue;
+    }
 
-  const linkHandle = await page.evaluateHandle((value) => {
-    const rows = Array.from(document.querySelectorAll('table tbody tr'));
-    const row = rows.find(currentRow => currentRow.innerText.includes(value));
-    return row?.querySelector('a') || null;
-  }, lookupKey);
+    rowFound = true;
+    receiptHref = await rowLink.getProperty('href').then(handle => handle.jsonValue()).catch(() => '');
 
-  const linkElement = linkHandle.asElement();
-  if (!linkElement) {
-    console.log(`[Scraper] Receipt link not found in orders list for ${lookupKey}`);
-    await linkHandle.dispose();
-    return null;
+    await Promise.all([
+      page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => null),
+      rowLink.click(),
+    ]);
+    await rowHandle.dispose();
+    return readReceiptDetail(page, order, receiptHref);
   }
 
-  await Promise.all([
-    page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => null),
-    linkElement.click(),
-  ]);
-  await linkHandle.dispose();
+  if (!rowFound) {
+    console.log(`[Scraper] Receipt link not found in paged orders list for ${lookupKeys[0]}`);
+    return null;
+  }
+  return null;
+}
 
-  return readReceiptDetail(page, order, receiptHref);
+async function primeRecentOrderDetails(browser, orders, seededOrderDetails, options = {}) {
+  const sid = options.sid || null;
+  const count = Math.max(0, options.count || DETAIL_PRIME_COUNT);
+  const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
+  const targets = orders
+    .filter(order => !seededOrderDetails[order.txId || order.id])
+    .slice(0, count);
+
+  if (!targets.length) return 0;
+
+  console.log(`[Scraper] Warming up ${targets.length} recent order receipts...`);
+  const page = await createWorkerPage(browser);
+  let primed = 0;
+
+  try {
+    await ensureStoreContext(page, sid);
+
+    for (const order of targets) {
+      let detail = null;
+
+      try {
+        detail = await fetchOrderDetail(page, order);
+        if (!detail) {
+          console.log(`[Scraper] Warm-up fallback via paged orders list for ${order.txId || order.id}...`);
+          detail = await fetchOrderDetailFromOrdersList(page, order);
+        }
+      } catch (error) {
+        console.log(`[Scraper] Warm-up failed for ${order.txId || order.id}: ${error.message}`);
+      }
+
+      if (detail) {
+        seededOrderDetails[order.txId || order.id] = detail;
+        primed++;
+      }
+
+      if (onProgress) onProgress({ order, detail, primed, total: targets.length });
+    }
+  } finally {
+    await page.close();
+  }
+
+  return primed;
 }
 
 async function fetchSingleOrderDetail(order, options = {}) {
@@ -553,6 +1008,35 @@ async function fetchSingleOrderDetail(order, options = {}) {
 
     await page.close();
     return detail;
+  } finally {
+    await browser.close();
+  }
+}
+
+async function fetchOrdersForDate(dateKey, options = {}) {
+  const browser = await puppeteer.launch({
+    headless: 'new',
+    args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu'],
+  });
+
+  try {
+    const page = await createWorkerPage(browser);
+    await loginToTapTouch(page);
+    const sid = await ensureStoreContext(page, options.sid);
+    const { start, end } = buildDayRange(dateKey);
+    const orders = await collectOrdersList(
+      page,
+      buildOrdersReportUrl({ start, end }),
+      dateKey
+    );
+    await page.close();
+
+    return {
+      date: dateKey,
+      sid,
+      fetchedAt: new Date().toISOString(),
+      orders,
+    };
   } finally {
     await browser.close();
   }
@@ -622,6 +1106,25 @@ async function scrapeTapTouch() {
       console.log('[Scraper] Weekly orders fallback:', err.message);
     }
 
+    // ══ 5. Product Report: popular dishes ════════════════════
+    let products = [];
+    try {
+      console.log('[Scraper] Loading product report...');
+      const productUrl = buildProductReportUrl({
+        sid: dashboardSid,
+        label: 'Today',
+        start: new Date(new Date().setHours(0, 0, 0, 0)),
+        end: new Date(new Date().setHours(23, 59, 59, 999)),
+      });
+      await page.goto(productUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
+      await wait(3000);
+      const productHTML = await page.content();
+      products = parseProductsFromHtml(productHTML);
+      console.log('[Scraper] Scraped products count:', products.length);
+    } catch (err) {
+      console.log('[Scraper] Products report scraping failed:', err.message);
+    }
+
     const capturedAt = new Date().toISOString();
     const dashData = {
       sid:      dashboardSid,
@@ -656,6 +1159,7 @@ async function scrapeTapTouch() {
         allOrders,
         weeklyOrders,
         orderDetails: seededOrderDetails,
+        products,
         syncState: buildSyncState({
           phase,
           message,
@@ -671,14 +1175,36 @@ async function scrapeTapTouch() {
     };
 
     if (!PREFETCH_DETAILS) {
+      saveSnapshot(
+        'core_ready',
+        DETAIL_PRIME_COUNT > 0
+          ? `⚡ 核心数据已更新，正在预热最近订单收据（已缓存 ${detailReadyCount}/${totalDetails}）`
+          : `⚡ 核心数据已更新，订单详情按需加载（已缓存 ${detailReadyCount}/${totalDetails}）`
+      );
+
+      if (DETAIL_PRIME_COUNT > 0) {
+        await primeRecentOrderDetails(browser, allOrders, seededOrderDetails, {
+          sid: dashboardSid,
+          count: DETAIL_PRIME_COUNT,
+          onProgress: ({ primed, total }) => {
+            detailReadyCount = Object.keys(seededOrderDetails).length;
+            saveSnapshot(
+              'details',
+              `⚡ 核心数据已更新，最近订单收据预热中（${primed}/${total}，已缓存 ${detailReadyCount}/${totalDetails}）`
+            );
+          },
+        });
+        detailReadyCount = Object.keys(seededOrderDetails).length;
+      }
+
       const finalResult = saveSnapshot(
         'complete',
-        `⚡ 核心数据已更新，订单详情按需加载（已缓存 ${detailReadyCount}/${totalDetails}）`
+        `⚡ 核心数据已更新，最近订单详情已就绪（已缓存 ${detailReadyCount}/${totalDetails}）`
       );
       const sizeMB = (fs.statSync(SCRAPE_RESULT_PATH).size / 1024 / 1024).toFixed(2);
       console.log(`\n[Scraper] ✅ Done! scrape-result.json (${sizeMB} MB)`);
       console.log(`  Orders:          ${allOrders.length}`);
-      console.log(`  Order details:   on-demand (${detailReadyCount}/${totalDetails} cached)`);
+      console.log(`  Order details:   on-demand + warm (${detailReadyCount}/${totalDetails} cached)`);
       console.log(`  Sales reports:   ${Object.keys(salesReport).length}`);
 
       await browser.close();
@@ -755,6 +1281,11 @@ async function scrapeTapTouch() {
 }
 
 module.exports = {
+  createSessionByLogin,
+  fetchCoreDataWithSession,
+  fetchOrdersForDateWithSession,
+  fetchSingleOrderDetailWithSession,
+  fetchOrdersForDate,
   scrapeTapTouch,
   fetchSingleOrderDetail,
   parseReceiptDetail,
