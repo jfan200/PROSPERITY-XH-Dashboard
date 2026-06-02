@@ -5,28 +5,49 @@
  */
 'use strict';
 
-const express  = require('express');
-const cors     = require('cors');
+const express  = require('./mini-express');
 const path     = require('path');
 const fs       = require('fs');
 const { spawn } = require('child_process');
 const {
   createSessionByLogin,
   fetchCoreDataWithSession,
+  fetchProductsForRangeWithSession,
   fetchOrdersForDateWithSession,
   fetchSingleOrderDetailWithSession,
+  fetchProductsForRange,
   fetchOrdersForDate,
   fetchSingleOrderDetail,
   parseReceiptDetail,
 } = require('./scraper');
 
 const app  = express();
-const PORT = 3001;
-const COOKIE_REFRESH_MS = 30 * 60 * 1000;
-const AUTO_FETCH_MS = 5 * 60 * 1000;
-const DETAIL_PREFETCH_WORKERS = Math.max(1, Number(process.env.DETAIL_PREFETCH_WORKERS || 2));
+const PORT = Number(process.env.PORT || 3001);
+const COOKIE_REFRESH_MS = Math.max(5 * 60 * 1000, Number(process.env.TAPTOUCH_COOKIE_REFRESH_MS || 30 * 60 * 1000));
+const AUTO_FETCH_MS = Math.max(60 * 1000, Number(process.env.TAPTOUCH_AUTO_FETCH_MS || 5 * 60 * 1000));
+const DETAIL_PREFETCH_WORKERS = Math.max(1, Number(process.env.TAPTOUCH_DETAIL_PREFETCH_WORKERS || process.env.DETAIL_PREFETCH_WORKERS || 2));
 
-app.use(cors());
+function hasConfiguredTapTouchCredentials() {
+  const email = String(process.env.TAPTOUCH_EMAIL || '').trim();
+  const password = String(process.env.TAPTOUCH_PASSWORD || '').trim();
+
+  if (!email || !password) return false;
+  if (email === 'your-email@example.com') return false;
+  if (password === 'your-password') return false;
+
+  return true;
+}
+
+const AUTO_SYNC_ENABLED = /^(1|true|yes)$/i.test(process.env.TAPTOUCH_AUTO_SYNC || 'true')
+  && hasConfiguredTapTouchCredentials();
+
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
 app.use(express.json());
 
 // Disable caching for development
@@ -95,6 +116,18 @@ function getTodayDateKey(referenceDate = new Date()) {
   return formatDateKey(referenceDate);
 }
 
+function buildDayRange(dateKey) {
+  const match = String(dateKey || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) {
+    throw new Error(`Invalid date key: ${dateKey}`);
+  }
+
+  const [, year, month, day] = match;
+  const start = new Date(Number(year), Number(month) - 1, Number(day), 0, 0, 0, 0);
+  const end = new Date(Number(year), Number(month) - 1, Number(day), 23, 59, 59, 999);
+  return { start, end };
+}
+
 function isSummaryLikeOrder(order) {
   const id = String(order?.id || '').trim();
   const idKey = id.toLowerCase().replace(/[\s:]/g, '');
@@ -156,6 +189,241 @@ function buildOrdersDataset(orders = [], meta = {}) {
     cachedDetails: mappedOrders.filter(order => order.detailCached).length,
     orders: mappedOrders,
   };
+}
+
+function buildProductInsights(products = []) {
+  const normalized = Array.isArray(products) ? products : [];
+  const totalQty = normalized.reduce((sum, product) => sum + (Number(product.qty) || 0), 0);
+  const totalRevenue = round2(normalized.reduce((sum, product) => sum + (Number(product.amount) || 0), 0));
+  const totalProfit = round2(normalized.reduce((sum, product) => sum + (Number(product.profit) || 0), 0));
+  const uniqueProducts = normalized.length;
+  const avgRevenuePerItem = totalQty > 0 ? round2(totalRevenue / totalQty) : 0;
+  const topProduct = normalized[0] || null;
+  const topShare = topProduct && totalRevenue > 0
+    ? round2((Number(topProduct.amount || 0) / totalRevenue) * 100)
+    : 0;
+
+  const concentrationTop5 = totalRevenue > 0
+    ? round2((normalized.slice(0, 5).reduce((sum, product) => sum + (Number(product.amount) || 0), 0) / totalRevenue) * 100)
+    : 0;
+
+  const tailShare = round2(Math.max(0, 100 - concentrationTop5));
+
+  return {
+    totalQty,
+    totalRevenue,
+    totalProfit,
+    uniqueProducts,
+    avgRevenuePerItem,
+    topProduct: topProduct ? {
+      rank: topProduct.rank || 1,
+      name: topProduct.name || '',
+      qty: Number(topProduct.qty) || 0,
+      amount: Number(topProduct.amount) || 0,
+      sharePct: topShare,
+    } : null,
+    concentrationTop5,
+    tailShare,
+  };
+}
+
+function buildProductReportDataset(products = [], meta = {}) {
+  const normalized = Array.isArray(products)
+    ? products
+        .map((product, index) => ({
+          rank: index + 1,
+          name: product.name || '',
+          code: product.code || '',
+          category: product.category || '未分类',
+          onlineQty: Number(product.onlineQty) || 0,
+          onlineAmount: round2(Number(product.onlineAmount) || 0),
+          qty: Number(product.qty) || 0,
+          amount: round2(Number(product.amount) || 0),
+          sharePct: round2(Number(product.sharePct) || 0),
+          cost: round2(Number(product.cost) || 0),
+          profit: round2(Number(product.profit) || 0),
+          marginPct: round2((Number(product.amount) || 0) > 0 ? ((Number(product.profit) || 0) / Number(product.amount)) * 100 : 0),
+        }))
+        .filter(product => product.name && product.qty > 0)
+        .sort((a, b) => (b.qty - a.qty) || (b.amount - a.amount))
+        .map((product, index) => ({ ...product, rank: index + 1 }))
+    : [];
+
+  return {
+    mode: meta.mode || 'today',
+    label: meta.label || '今天',
+    dateKey: meta.dateKey || null,
+    weekStart: meta.weekStart || null,
+    weekEnd: meta.weekEnd || null,
+    fetchedAt: meta.fetchedAt || null,
+    source: meta.source || 'live',
+    products: normalized,
+    insights: buildProductInsights(normalized),
+  };
+}
+
+function calcChangePct(current, previous) {
+  const currentVal = Number(current) || 0;
+  const previousVal = Number(previous) || 0;
+  if (previousVal === 0) return currentVal === 0 ? 0 : 100;
+  return round2(((currentVal - previousVal) / previousVal) * 100);
+}
+
+function compareProductsByName(currentProducts = [], previousProducts = []) {
+  const previousMap = new Map(previousProducts.map(product => [product.name, product]));
+  return currentProducts.map(product => {
+    const previous = previousMap.get(product.name) || null;
+    return {
+      ...product,
+      previousQty: Number(previous?.qty) || 0,
+      previousAmount: Number(previous?.amount) || 0,
+      previousProfit: Number(previous?.profit) || 0,
+      qtyChangePct: calcChangePct(product.qty, previous?.qty),
+      amountChangePct: calcChangePct(product.amount, previous?.amount),
+      profitChangePct: calcChangePct(product.profit, previous?.profit),
+    };
+  });
+}
+
+function summarizeCategoryStats(products = [], totalRevenue = 0, totalProfit = 0, totalQty = 0) {
+  const bucket = new Map();
+
+  for (const product of products) {
+    const category = product.category || '未分类';
+    const current = bucket.get(category) || { category, qty: 0, amount: 0, profit: 0, skuCount: 0 };
+    current.qty += Number(product.qty) || 0;
+    current.amount += Number(product.amount) || 0;
+    current.profit += Number(product.profit) || 0;
+    current.skuCount += 1;
+    bucket.set(category, current);
+  }
+
+  return Array.from(bucket.values())
+    .map(item => ({
+      ...item,
+      amount: round2(item.amount),
+      profit: round2(item.profit),
+      revenueSharePct: totalRevenue > 0 ? round2((item.amount / totalRevenue) * 100) : 0,
+      profitSharePct: totalProfit > 0 ? round2((item.profit / totalProfit) * 100) : 0,
+      qtySharePct: totalQty > 0 ? round2((item.qty / totalQty) * 100) : 0,
+    }))
+    .sort((a, b) => b.amount - a.amount);
+}
+
+function median(values = []) {
+  const sorted = values.filter(Number.isFinite).sort((a, b) => a - b);
+  if (!sorted.length) return 0;
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? (sorted[middle - 1] + sorted[middle]) / 2
+    : sorted[middle];
+}
+
+function buildMenuEngineering(products = []) {
+  const qtyMedian = median(products.map(product => Number(product.qty) || 0));
+  const profitMedian = median(products.map(product => Number(product.profit) || 0));
+
+  const quadrants = {
+    stars: [],
+    traffic: [],
+    potential: [],
+    weak: [],
+  };
+
+  for (const product of products) {
+    const highQty = (Number(product.qty) || 0) >= qtyMedian;
+    const highProfit = (Number(product.profit) || 0) >= profitMedian;
+
+    if (highQty && highProfit) quadrants.stars.push(product);
+    else if (highQty && !highProfit) quadrants.traffic.push(product);
+    else if (!highQty && highProfit) quadrants.potential.push(product);
+    else quadrants.weak.push(product);
+  }
+
+  const sortQuadrant = list => list
+    .slice()
+    .sort((a, b) => (Number(b.profit) - Number(a.profit)) || (Number(b.qty) - Number(a.qty)))
+    .slice(0, 5);
+
+  return {
+    qtyMedian: round2(qtyMedian),
+    profitMedian: round2(profitMedian),
+    quadrants: {
+      stars: sortQuadrant(quadrants.stars),
+      traffic: sortQuadrant(quadrants.traffic),
+      potential: sortQuadrant(quadrants.potential),
+      weak: sortQuadrant(quadrants.weak),
+    },
+  };
+}
+
+function buildConcentrationStats(products = [], totalRevenue = 0) {
+  const top5Revenue = round2(products.slice(0, 5).reduce((sum, product) => sum + (Number(product.amount) || 0), 0));
+  const otherRevenue = round2(Math.max(0, totalRevenue - top5Revenue));
+  const top5SharePct = totalRevenue > 0 ? round2((top5Revenue / totalRevenue) * 100) : 0;
+  const otherSharePct = round2(Math.max(0, 100 - top5SharePct));
+
+  return {
+    top5Revenue,
+    otherRevenue,
+    top5SharePct,
+    otherSharePct,
+    riskLevel: top5SharePct >= 60 ? 'high' : top5SharePct >= 45 ? 'medium' : 'low',
+  };
+}
+
+function buildProfitLeaders(products = []) {
+  return products
+    .slice()
+    .sort((a, b) => (Number(b.profit) - Number(a.profit)) || (Number(b.amount) - Number(a.amount)))
+    .slice(0, 5);
+}
+
+function buildChangeLeaders(currentProducts = [], previousProducts = []) {
+  const compared = compareProductsByName(currentProducts, previousProducts)
+    .filter(product => product.previousQty > 0 || product.qty > 0);
+
+  const growth = compared
+    .filter(product => product.qtyChangePct > 0)
+    .sort((a, b) => b.qtyChangePct - a.qtyChangePct)[0] || null;
+
+  const decline = compared
+    .filter(product => product.qtyChangePct < 0)
+    .sort((a, b) => a.qtyChangePct - b.qtyChangePct)[0] || null;
+
+  return { growth, decline, compared };
+}
+
+function buildTrendSeries(timeline = [], productNames = [], metric = 'qty') {
+  return productNames.map(name => ({
+    name,
+    data: timeline.map(entry => {
+      const matched = (entry.products || []).find(product => product.name === name);
+      const value = matched ? Number(matched[metric]) || 0 : 0;
+      return round2(value);
+    }),
+  }));
+}
+
+function buildTrendPackage(timeline = [], currentProducts = []) {
+  const labels = timeline.map(entry => entry.label);
+  const topNames = currentProducts.slice(0, 5).map(product => product.name);
+  return {
+    labels,
+    topNames,
+    qty: buildTrendSeries(timeline, topNames, 'qty'),
+    revenue: buildTrendSeries(timeline, topNames, 'amount'),
+    profit: buildTrendSeries(timeline, topNames, 'profit'),
+  };
+}
+
+function getWeekRangeForDateKey(dateKey) {
+  const referenceDate = parseLocalDateTime(`${dateKey} 00:00:00`) || new Date();
+  const weekStart = startOfWeekMonday(referenceDate);
+  const weekEnd = new Date(weekStart);
+  weekEnd.setDate(weekStart.getDate() + 6);
+  weekEnd.setHours(23, 59, 59, 999);
+  return { weekStart, weekEnd };
 }
 
 function extractOfflineChart(card = '') {
@@ -258,6 +526,60 @@ function buildWeeklyOverview(raw) {
       avgTicket: bestDay.avgTicket,
     } : null,
     daily,
+  };
+}
+
+function buildEmptyWeeklyOverview(referenceDate = new Date()) {
+  const weekStart = startOfWeekMonday(referenceDate);
+  const weekEnd = new Date(weekStart);
+  weekEnd.setDate(weekStart.getDate() + 6);
+  weekEnd.setHours(23, 59, 59, 999);
+
+  return {
+    dateRangeLabel: formatRangeLabel(weekStart, weekEnd),
+    totalRevenue: 0,
+    totalOrders: 0,
+    avgTicket: 0,
+    activeDays: 0,
+    bestDay: null,
+    daily: WEEKDAY_MON.map((weekday, index) => {
+      const dateObj = new Date(weekStart);
+      dateObj.setDate(weekStart.getDate() + index);
+      const key = formatDateKey(dateObj);
+
+      return {
+        label: weekday,
+        chartLabel: weekday,
+        weekday,
+        fullLabel: `${weekday} ${dateObj.getDate()} ${MONTH_SHORT[dateObj.getMonth()]}`,
+        dateKey: key,
+        revenue: 0,
+        orders: 0,
+        avgTicket: 0,
+        hasData: false,
+        isToday: key === formatDateKey(referenceDate),
+      };
+    }),
+  };
+}
+
+function buildEmptyDashboardData(referenceDate = new Date()) {
+  return {
+    storeName: 'PROSPERITY XH',
+    brandName: '食集-重庆小面',
+    totalRevenue: 0,
+    totalOrders: 0,
+    avgTicket: 0,
+    hourlySales: [],
+    payments: [],
+    recentOrders: [],
+    ordersDateKey: formatDateKey(referenceDate),
+    weeklyOverview: buildEmptyWeeklyOverview(referenceDate),
+    syncState: null,
+    orderDetails: {},
+    salesReport: {},
+    scrapedAt: null,
+    products: [],
   };
 }
 
@@ -371,7 +693,13 @@ function parseTapTouchData(raw) {
 // ============================================================
 // CACHE
 // ============================================================
-let cache = { data: null, raw: null, lastUpdated: null, syncState: null };
+let cache = {
+  data: buildEmptyDashboardData(),
+  raw: null,
+  lastUpdated: null,
+  syncState: null,
+  hasLiveData: false,
+};
 const inflightDetailFetches = new Map();
 const inflightDateFetches = new Map();
 const detailPrefetchQueue = [];
@@ -429,6 +757,7 @@ function loadData() {
     cache.raw  = raw;
     cache.data = parseTapTouchData(raw);
     cache.syncState = raw.syncState || null;
+    cache.hasLiveData = true;
     cache.lastUpdated = new Date().toISOString();
     const d = cache.data;
     console.log(`[Server] ✅ Loaded: $${d.totalRevenue} / ${d.totalOrders} orders / ${d.hourlySales.filter(h=>h.revenue>0).length} active hours`);
@@ -565,6 +894,243 @@ async function fetchOrdersForDateLive(dateKey) {
   }
 
   return fetched;
+}
+
+async function fetchProductsReportLive(options = {}) {
+  const sid = tapTouchSession?.sid || cache.raw?.dashData?.sid || cache.raw?.weeklyDashData?.sid || null;
+  let fetched = null;
+
+  if (tapTouchSession?.cookieHeader) {
+    try {
+      fetched = await fetchProductsForRangeWithSession(tapTouchSession, { ...options, sid });
+    } catch (error) {
+      if (error.code === 'SESSION_EXPIRED' || error.code === 'SESSION_MISSING') {
+        await refreshTapTouchSession(true);
+        fetched = await fetchProductsForRangeWithSession(tapTouchSession, {
+          ...options,
+          sid: tapTouchSession?.sid || sid,
+        });
+      } else {
+        throw error;
+      }
+    }
+  } else {
+    await refreshTapTouchSession(true);
+    fetched = await fetchProductsForRangeWithSession(tapTouchSession, {
+      ...options,
+      sid: tapTouchSession?.sid || sid,
+    });
+  }
+
+  return fetched;
+}
+
+function shiftDateKey(dateKey, deltaDays) {
+  const [year, month, day] = String(dateKey).split('-').map(Number);
+  const date = new Date(year, month - 1, day);
+  date.setDate(date.getDate() + deltaDays);
+  return formatDateKey(date);
+}
+
+function buildDateKeySeries(endDateKey, length) {
+  const keys = [];
+  for (let index = length - 1; index >= 0; index -= 1) {
+    keys.push(shiftDateKey(endDateKey, -index));
+  }
+  return keys;
+}
+
+async function fetchProductReportForDateKey(dateKey) {
+  const { start, end } = buildDayRange(dateKey);
+
+  try {
+    const fetched = await fetchProductsReportLive({
+      label: 'Today',
+      start,
+      end,
+    });
+    return buildProductReportDataset(fetched.products, {
+      mode: 'date',
+      label: dateKey,
+      dateKey,
+      fetchedAt: fetched.fetchedAt,
+      source: 'date_live',
+    });
+  } catch (error) {
+    const fetched = await fetchProductsForRange({
+      sid: cache.raw?.dashData?.sid || cache.raw?.weeklyDashData?.sid || null,
+      label: 'Today',
+      start,
+      end,
+    });
+    return buildProductReportDataset(fetched.products, {
+      mode: 'date',
+      label: dateKey,
+      dateKey,
+      fetchedAt: fetched.fetchedAt,
+      source: 'date_live_fallback',
+    });
+  }
+}
+
+async function fetchTimelineReports(dateKeys = []) {
+  const reports = [];
+  for (const key of dateKeys) {
+    reports.push(await fetchProductReportForDateKey(key));
+  }
+  return reports;
+}
+
+async function buildProductsAnalysisPayload(mode, dateKey) {
+  let currentReport = null;
+  let previousReport = null;
+  let comparisonLabel = '';
+  let trendEndDateKey = dateKey;
+
+  if (mode === 'today') {
+    currentReport = await fetchProductReportForDateKey(getTodayDateKey());
+    previousReport = await fetchProductReportForDateKey(shiftDateKey(getTodayDateKey(), -1));
+    comparisonLabel = '较昨日';
+    trendEndDateKey = getTodayDateKey();
+  } else if (mode === 'date') {
+    currentReport = await fetchProductReportForDateKey(dateKey);
+    previousReport = await fetchProductReportForDateKey(shiftDateKey(dateKey, -1));
+    comparisonLabel = '较前一日';
+    trendEndDateKey = dateKey;
+  } else {
+    const { weekStart, weekEnd } = getWeekRangeForDateKey(dateKey);
+    const previousWeekStart = new Date(weekStart);
+    previousWeekStart.setDate(previousWeekStart.getDate() - 7);
+    const previousWeekEnd = new Date(weekEnd);
+    previousWeekEnd.setDate(previousWeekEnd.getDate() - 7);
+
+    let fetchedCurrent = null;
+    let fetchedPrevious = null;
+
+    try {
+      fetchedCurrent = await fetchProductsReportLive({
+        label: 'This Week',
+        start: weekStart,
+        end: weekEnd,
+      });
+      fetchedPrevious = await fetchProductsReportLive({
+        label: 'This Week',
+        start: previousWeekStart,
+        end: previousWeekEnd,
+      });
+    } catch (error) {
+      fetchedCurrent = await fetchProductsForRange({
+        sid: cache.raw?.dashData?.sid || cache.raw?.weeklyDashData?.sid || null,
+        label: 'This Week',
+        start: weekStart,
+        end: weekEnd,
+      });
+      fetchedPrevious = await fetchProductsForRange({
+        sid: cache.raw?.dashData?.sid || cache.raw?.weeklyDashData?.sid || null,
+        label: 'This Week',
+        start: previousWeekStart,
+        end: previousWeekEnd,
+      });
+    }
+
+    currentReport = buildProductReportDataset(fetchedCurrent.products, {
+      mode: 'week',
+      label: formatRangeLabel(weekStart, weekEnd),
+      dateKey,
+      weekStart: formatDateKey(weekStart),
+      weekEnd: formatDateKey(weekEnd),
+      fetchedAt: fetchedCurrent.fetchedAt,
+      source: 'week_live',
+    });
+    previousReport = buildProductReportDataset(fetchedPrevious.products, {
+      mode: 'week',
+      label: formatRangeLabel(previousWeekStart, previousWeekEnd),
+      dateKey: formatDateKey(previousWeekStart),
+      weekStart: formatDateKey(previousWeekStart),
+      weekEnd: formatDateKey(previousWeekEnd),
+      fetchedAt: fetchedPrevious.fetchedAt,
+      source: 'week_previous',
+    });
+    comparisonLabel = '较上周';
+    trendEndDateKey = formatDateKey(weekEnd);
+  }
+
+  const trend7 = await fetchTimelineReports(buildDateKeySeries(trendEndDateKey, 7));
+  const trend30 = await fetchTimelineReports(buildDateKeySeries(trendEndDateKey, 30));
+  const totalSkuUniverse = new Set(trend30.flatMap(report => report.products.map(product => product.name))).size;
+  const comparedProducts = compareProductsByName(currentReport.products, previousReport.products);
+  const changes = buildChangeLeaders(currentReport.products, previousReport.products);
+  const totalSkus = Math.max(currentReport.insights.uniqueProducts, totalSkuUniverse);
+
+  const currentQty = currentReport.insights.totalQty;
+  const previousQty = previousReport.insights.totalQty;
+  const currentRevenue = currentReport.insights.totalRevenue;
+  const previousRevenue = previousReport.insights.totalRevenue;
+  const currentProfit = currentReport.insights.totalProfit;
+  const previousProfit = previousReport.insights.totalProfit;
+
+  return {
+    mode,
+    dateKey,
+    current: {
+      ...currentReport,
+      productsCompared: comparedProducts,
+    },
+    previous: previousReport,
+    comparisonLabel,
+    kpis: {
+      totalQty: {
+        value: currentQty,
+        previousValue: previousQty,
+        changePct: calcChangePct(currentQty, previousQty),
+      },
+      totalRevenue: {
+        value: currentRevenue,
+        previousValue: previousRevenue,
+        changePct: calcChangePct(currentRevenue, previousRevenue),
+      },
+      activeSkuRate: {
+        active: currentReport.insights.uniqueProducts,
+        total: totalSkus,
+        pct: totalSkus > 0 ? round2((currentReport.insights.uniqueProducts / totalSkus) * 100) : 0,
+      },
+      championShare: {
+        pct: currentReport.insights.topProduct?.sharePct || 0,
+        name: currentReport.insights.topProduct?.name || '',
+      },
+      totalProfit: {
+        value: currentProfit,
+        previousValue: previousProfit,
+        changePct: calcChangePct(currentProfit, previousProfit),
+      },
+    },
+    rankings: {
+      byQty: currentReport.products.slice().sort((a, b) => (b.qty - a.qty) || (b.amount - a.amount)),
+      byRevenue: currentReport.products.slice().sort((a, b) => (b.amount - a.amount) || (b.qty - a.qty)),
+      byProfit: currentReport.products.slice().sort((a, b) => (b.profit - a.profit) || (b.amount - a.amount)),
+    },
+    insights: {
+      champion: currentReport.insights.topProduct,
+      growthLeader: changes.growth,
+      declineLeader: changes.decline,
+      concentration: buildConcentrationStats(currentReport.products, currentRevenue),
+      recommendation: currentReport.insights.concentrationTop5 >= 60
+        ? '当前销售集中度偏高，建议增加长尾产品曝光与套餐联动，降低单一爆款依赖。'
+        : '当前菜单结构较均衡，可继续强化冠军单品，并针对潜力产品做第二波推广。',
+    },
+    menuEngineering: buildMenuEngineering(currentReport.products),
+    categoryAnalysis: summarizeCategoryStats(
+      currentReport.products,
+      currentRevenue,
+      currentProfit,
+      currentQty
+    ),
+    profitLeaders: buildProfitLeaders(currentReport.products),
+    trends: {
+      range7: buildTrendPackage(trend7, currentReport.products),
+      range30: buildTrendPackage(trend30, currentReport.products),
+    },
+  };
 }
 
 async function runAutoCookieSync(trigger = 'interval') {
@@ -821,16 +1387,17 @@ async function getOrFetchOrderDetail(key, options = {}) {
 
 app.get('/api/status', (req, res) => res.json({
   ok:          true,
-  dataSource:  cache.data ? 'taptouch_live' : 'no_data',
-  storeName:   cache.data?.storeName || 'Unknown',
+  dataSource:  cache.hasLiveData ? 'taptouch_live' : 'empty',
+  storeName:   cache.data?.storeName || 'PROSPERITY XH',
   lastUpdated: cache.lastUpdated,
-  scrapedAt:   cache.data?.scrapedAt || null,
+  scrapedAt:   cache.hasLiveData ? (cache.data?.scrapedAt || null) : null,
   autoSync: {
     cookieLastRefreshedAt: autoSyncState.cookieLastRefreshedAt,
     dataLastFetchedAt: autoSyncState.dataLastFetchedAt,
     running: autoSyncState.running,
     cookieRefreshing: autoSyncState.cookieRefreshing,
     lastError: autoSyncState.lastError,
+    enabled: AUTO_SYNC_ENABLED,
   },
   detailPrefetch: {
     queueSize: detailPrefetchQueue.length,
@@ -839,14 +1406,13 @@ app.get('/api/status', (req, res) => res.json({
 }));
 
 app.get('/api/sales/hourly', (req, res) => {
-  if (!cache.data) return res.status(503).json({ error: 'No data — click 从TapTouch同步' });
   res.json(cache.data.hourlySales);
 });
 
 app.get('/api/sales/summary', (req, res) => {
-  if (!cache.data) return res.status(503).json({ error: 'No data' });
   const d = cache.data;
   res.json({
+    hasLiveData: cache.hasLiveData,
     storeName:    d.storeName,
     brandName:    d.brandName,
     ordersDateKey: d.ordersDateKey,
@@ -862,16 +1428,164 @@ app.get('/api/sales/summary', (req, res) => {
 });
 
 app.get('/api/orders/recent', (req, res) => {
-  if (!cache.data) return res.status(503).json({ error: 'No data' });
   res.json(cache.data.recentOrders);
 });
 
-app.get('/api/orders/by-date', async (req, res) => {
-  if (!cache.data) return res.status(503).json({ error: 'No data' });
+app.get('/api/products/report', async (req, res) => {
+  const mode = String(req.query.mode || 'today').trim();
+  const dateKey = String(req.query.date || '').trim() || getTodayDateKey();
 
+  if (!['today', 'date', 'week'].includes(mode)) {
+    return res.status(400).json({ error: 'Invalid mode. Use today, date, or week.' });
+  }
+
+  if ((mode === 'date' || mode === 'week') && !/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
+    return res.status(400).json({ error: 'Invalid date. Use YYYY-MM-DD.' });
+  }
+
+  if (mode === 'today') {
+    if (cache.hasLiveData && Array.isArray(cache.data?.products) && cache.data.products.length > 0) {
+      return res.json(buildProductReportDataset(cache.data.products, {
+        mode: 'today',
+        label: '今天',
+        dateKey: cache.data?.ordersDateKey || getTodayDateKey(),
+        fetchedAt: cache.data?.scrapedAt || cache.lastUpdated,
+        source: 'today_live',
+      }));
+    }
+
+    try {
+      const { start, end } = buildDayRange(getTodayDateKey());
+      let fetched = null;
+
+      try {
+        fetched = await fetchProductsReportLive({
+          label: 'Today',
+          start,
+          end,
+        });
+      } catch (error) {
+        fetched = await fetchProductsForRange({
+          sid: cache.raw?.dashData?.sid || cache.raw?.weeklyDashData?.sid || null,
+          label: 'Today',
+          start,
+          end,
+        });
+      }
+
+      return res.json(buildProductReportDataset(fetched.products, {
+        mode: 'today',
+        label: '今天',
+        dateKey: getTodayDateKey(),
+        fetchedAt: fetched.fetchedAt,
+        source: 'today_live_direct',
+      }));
+    } catch (error) {
+      return res.json(buildProductReportDataset([], {
+        mode: 'today',
+        label: '今天',
+        dateKey: getTodayDateKey(),
+        fetchedAt: null,
+        source: 'empty',
+      }));
+    }
+  }
+
+  try {
+    let fetched = null;
+    let dataset = null;
+
+    if (mode === 'date') {
+      const { start, end } = buildDayRange(dateKey);
+      try {
+        fetched = await fetchProductsReportLive({
+          label: 'Today',
+          start,
+          end,
+        });
+      } catch (error) {
+        fetched = await fetchProductsForRange({
+          sid: cache.raw?.dashData?.sid || cache.raw?.weeklyDashData?.sid || null,
+          label: 'Today',
+          start,
+          end,
+        });
+      }
+
+      dataset = buildProductReportDataset(fetched.products, {
+        mode: 'date',
+        label: dateKey,
+        dateKey,
+        fetchedAt: fetched.fetchedAt,
+        source: 'date_live',
+      });
+    } else {
+      const { weekStart, weekEnd } = getWeekRangeForDateKey(dateKey);
+      try {
+        fetched = await fetchProductsReportLive({
+          label: 'This Week',
+          start: weekStart,
+          end: weekEnd,
+        });
+      } catch (error) {
+        fetched = await fetchProductsForRange({
+          sid: cache.raw?.dashData?.sid || cache.raw?.weeklyDashData?.sid || null,
+          label: 'This Week',
+          start: weekStart,
+          end: weekEnd,
+        });
+      }
+
+      dataset = buildProductReportDataset(fetched.products, {
+        mode: 'week',
+        label: formatRangeLabel(weekStart, weekEnd),
+        dateKey,
+        weekStart: formatDateKey(weekStart),
+        weekEnd: formatDateKey(weekEnd),
+        fetchedAt: fetched.fetchedAt,
+        source: 'week_live',
+      });
+    }
+
+    res.json(dataset);
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'Failed to load products report' });
+  }
+});
+
+app.get('/api/products/analysis', async (req, res) => {
+  const mode = String(req.query.mode || 'today').trim();
+  const dateKey = String(req.query.date || '').trim() || getTodayDateKey();
+
+  if (!['today', 'date', 'week'].includes(mode)) {
+    return res.status(400).json({ error: 'Invalid mode. Use today, date, or week.' });
+  }
+  if ((mode === 'date' || mode === 'week') && !/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
+    return res.status(400).json({ error: 'Invalid date. Use YYYY-MM-DD.' });
+  }
+
+  try {
+    const payload = await buildProductsAnalysisPayload(mode, dateKey || getTodayDateKey());
+    res.json(payload);
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'Failed to build products analysis' });
+  }
+});
+
+app.get('/api/orders/by-date', async (req, res) => {
   const dateKey = String(req.query.date || '').trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
     return res.status(400).json({ error: 'Invalid date. Use YYYY-MM-DD.' });
+  }
+
+  if (!cache.hasLiveData) {
+    return res.json(buildOrdersDataset([], {
+      dateKey,
+      label: dateKey === getTodayDateKey() ? '今天' : dateKey,
+      isToday: dateKey === getTodayDateKey(),
+      source: 'empty',
+      fetchedAt: null,
+    }));
   }
 
   try {
@@ -883,7 +1597,7 @@ app.get('/api/orders/by-date', async (req, res) => {
 });
 
 app.post('/api/orders/prefetch', (req, res) => {
-  if (!cache.data) return res.status(503).json({ ok: false, error: 'No data' });
+  if (!cache.hasLiveData) return res.json({ ok: true, queued: 0, queueSize: 0, activeWorkers: 0 });
 
   const keys = Array.isArray(req.body?.keys) ? req.body.keys : [];
   const queued = enqueueDetailPrefetch(keys, { highPriority: false });
@@ -897,7 +1611,7 @@ app.post('/api/orders/prefetch', (req, res) => {
 
 // Single order detail (items breakdown)
 app.get('/api/orders/detail/:key', async (req, res) => {
-  if (!cache.data) return res.status(503).json({ error: 'No data' });
+  if (!cache.hasLiveData) return res.status(404).json({ error: 'No data yet. Please sync from TapTouch first.' });
   const key = req.params.key;
 
   try {
@@ -980,13 +1694,11 @@ app.get('/api/receipt-proxy', async (req, res) => {
 
 // All order details map
 app.get('/api/orders/details', (req, res) => {
-  if (!cache.data) return res.status(503).json({ error: 'No data' });
   res.json(cache.data.orderDetails || {});
 });
 
 // Sales report data
 app.get('/api/sales/report', (req, res) => {
-  if (!cache.data) return res.status(503).json({ error: 'No data' });
   res.json(cache.data.salesReport || {});
 });
 
@@ -1026,7 +1738,7 @@ function applyCacheSyncStateToScrapeStatus() {
 
 app.get('/api/scrape/status', (req, res) => res.json({
   ...scrapeStatus,
-  dataReady:   !!cache.data,
+  dataReady:   cache.hasLiveData,
   lastUpdated: cache.lastUpdated,
 }));
 
@@ -1091,36 +1803,27 @@ app.post('/api/scrape/run', (req, res) => {
 // ============================================================
 // START
 // ============================================================
-const loaded = loadData();
-applyCacheSyncStateToScrapeStatus();
+const loaded = false;
 
-setTimeout(() => {
-  refreshTapTouchSession(true).catch(error => {
-    autoSyncState.lastError = error.message || 'Cookie refresh failed';
-    console.error('[Server] Initial cookie refresh failed:', error.message);
-  });
-}, 1000);
+if (AUTO_SYNC_ENABLED) {
+  console.log('[Server] Auto sync enabled. Dashboard visit can trigger sync automatically.');
 
-setTimeout(() => {
-  runAutoCookieSync('startup').catch(error => {
-    autoSyncState.lastError = error.message || 'Startup auto sync failed';
-    console.error('[Server] Startup auto sync failed:', error.message);
-  });
-}, 3000);
+  setInterval(() => {
+    refreshTapTouchSession(true).catch(error => {
+      autoSyncState.lastError = error.message || 'Cookie refresh failed';
+      console.error('[Server] Cookie refresh failed:', error.message);
+    });
+  }, COOKIE_REFRESH_MS);
 
-setInterval(() => {
-  refreshTapTouchSession(true).catch(error => {
-    autoSyncState.lastError = error.message || 'Cookie refresh failed';
-    console.error('[Server] Cookie refresh failed:', error.message);
-  });
-}, COOKIE_REFRESH_MS);
-
-setInterval(() => {
-  runAutoCookieSync('interval').catch(error => {
-    autoSyncState.lastError = error.message || 'Auto sync failed';
-    console.error('[Server] Auto sync failed:', error.message);
-  });
-}, AUTO_FETCH_MS);
+  setInterval(() => {
+    runAutoCookieSync('interval').catch(error => {
+      autoSyncState.lastError = error.message || 'Auto sync failed';
+      console.error('[Server] Auto sync failed:', error.message);
+    });
+  }, AUTO_FETCH_MS);
+} else {
+  console.log('[Server] TapTouch auto sync disabled until TAPTOUCH_EMAIL and TAPTOUCH_PASSWORD are configured.');
+}
 
 // Auto-reload when scrape-result.json changes
 fs.watchFile(path.join(__dirname, 'scrape-result.json'), { interval: 3000 }, () => {
@@ -1133,5 +1836,5 @@ fs.watchFile(path.join(__dirname, 'scrape-result.json'), { interval: 3000 }, () 
 app.listen(PORT, () => {
   console.log(`\n🍜  PROSPERITY XH Dashboard Server`);
   console.log(`    Dashboard: http://localhost:${PORT}`);
-  console.log(`    Data:      ${loaded ? `✅ TapTouch 真实数据 ($${cache.data?.totalRevenue})` : '❌ 请先点击同步按钮'}\n`);
+  console.log(`    Data:      ${loaded ? `✅ TapTouch 真实数据 ($${cache.data?.totalRevenue})` : '⭕ 初始为空，等待 TapTouch 同步'}\n`);
 });

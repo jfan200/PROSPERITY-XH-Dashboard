@@ -55,6 +55,5 @@ streams:
   # 需要先安装 ha-xiaomi-miot 或直接用 go2rtc + miot 协议
   
   dining_room:           # 用餐区小米摄像头
-    # 小米云台2K通常不开放本地RTSP，改用 Xiaomi 协议（需要填真实 DID）
     - "xiaomi://2359592066:cn@192.168.88.137?did=589141209&model=chuangmi.camera.029a02"
     # stream=0 主码流，stream=1 子码流（更省带宽）

@@ -177,6 +177,7 @@ function formatOrdersSourceLabel(source) {
     weekly_cache: '本周缓存',
     date_cache: '历史缓存',
     live_fetch: 'TapTouch 现抓',
+    empty: '等待同步',
   };
   return labels[source] || 'TapTouch 数据';
 }
@@ -947,7 +948,7 @@ function renderSalesHourlyChart(hourlySales) {
   const peakIdx = filtered.reduce((peak, v, i) => v.revenue > (filtered[peak]?.revenue || 0) ? i : peak, 0);
   const peakHour = filtered[peakIdx]?.hour || '--:--';
   const peakRev  = filtered[peakIdx]?.revenue || 0;
-  setText('sales-peak-badge', `🔥 高峰 ${peakHour}  $${peakRev}`);
+  setText('sales-peak-badge', `🔥 高峰 ${peakHour}  $${peakRev.toFixed(2)}`);
   setText('sales-hourly-sub', `今日实时数据 · 销售额 + 订单数双轴 · 最高峰 ${peakHour}`);
 
   const barColors = filtered.map((d, i) =>
@@ -2288,17 +2289,136 @@ function renderPerf(hourlySales) {
 // ============================================================
 // TOP ITEMS (premium product analytics widget)
 // ============================================================
+let cachedProductsToday = null;
+let activeProductsReport = null;
+let productsViewMode = 'today';
+let productsViewDate = '';
+let productsReportRequestId = 0;
+let productsSortMode = 'qty';
+let productsTrendRange = '7d';
+let productsTrendMetric = 'qty';
+let productsTrendChartInst = null;
+let productsConcentrationChartInst = null;
+let productsRankingExpanded = false;
+let productsReportLoading = false;
+
+function medalForRank(rank) {
+  if (rank === 1) return '🥇';
+  if (rank === 2) return '🥈';
+  if (rank === 3) return '🥉';
+  return `#${rank}`;
+}
+
+function percentText(value, digits = 1) {
+  const numeric = Number(value) || 0;
+  return `${numeric.toFixed(digits)}%`;
+}
+
+function trendArrow(value) {
+  const numeric = Number(value) || 0;
+  if (numeric > 0) return '↑';
+  if (numeric < 0) return '↓';
+  return '→';
+}
+
+function trendClass(value) {
+  const numeric = Number(value) || 0;
+  if (numeric > 0) return 'positive';
+  if (numeric < 0) return 'negative';
+  return 'neutral';
+}
+
+function getWeekRangeLabelFromDateKey(dateKey) {
+  const [year, month, day] = String(dateKey || '').split('-').map(Number);
+  const reference = new Date(year, (month || 1) - 1, day || 1);
+  const dayOfWeek = reference.getDay();
+  const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+  const weekStart = new Date(reference);
+  weekStart.setDate(reference.getDate() + diffToMonday);
+  const weekEnd = new Date(weekStart);
+  weekEnd.setDate(weekStart.getDate() + 6);
+
+  const fmt = date => new Intl.DateTimeFormat('en-AU', {
+    month: 'short',
+    day: 'numeric',
+  }).format(date);
+
+  return `${fmt(weekStart)} - ${fmt(weekEnd)}`;
+}
+
+function getProductsPeriodLabel(mode = productsViewMode, dateKey = productsViewDate || getMelbourneDateString()) {
+  if (mode === 'week') return getWeekRangeLabelFromDateKey(dateKey);
+  if (mode === 'date') return dateKey;
+  return '今天';
+}
+
+function getProductsSortLabel() {
+  if (productsSortMode === 'revenue') return '销售额';
+  if (productsSortMode === 'profit') return '利润';
+  return '销量';
+}
+
+function updateProductsControls() {
+  const dateInput = document.getElementById('products-date-input');
+  const prevBtn = document.querySelector('#page-products .products-date-tools .orders-date-nav-btn:first-child');
+  const nextBtn = document.querySelector('#page-products .products-date-tools .orders-date-nav-btn:last-child');
+  const todayBtn = document.getElementById('products-mode-today');
+  const rankingToggle = document.getElementById('products-ranking-toggle');
+  const todayKey = getMelbourneDateString();
+  const currentVal = productsViewDate || todayKey;
+
+  document.getElementById('products-mode-today')?.classList.toggle('active', productsViewMode === 'today');
+  document.getElementById('products-mode-date')?.classList.toggle('active', productsViewMode === 'date');
+  document.getElementById('products-mode-week')?.classList.toggle('active', productsViewMode === 'week');
+
+  if (dateInput) {
+    dateInput.max = todayKey;
+    dateInput.value = currentVal;
+    dateInput.disabled = productsReportLoading;
+  }
+  if (prevBtn) prevBtn.disabled = productsReportLoading;
+  if (nextBtn) nextBtn.disabled = productsReportLoading || currentVal >= todayKey;
+  if (todayBtn) todayBtn.textContent = '回到今天';
+  if (rankingToggle) {
+    rankingToggle.textContent = productsRankingExpanded ? '收起榜单' : '展开全部';
+    rankingToggle.disabled = productsReportLoading;
+  }
+
+  document.getElementById('products-sort-qty')?.classList.toggle('active', productsSortMode === 'qty');
+  document.getElementById('products-sort-revenue')?.classList.toggle('active', productsSortMode === 'revenue');
+  document.getElementById('products-sort-profit')?.classList.toggle('active', productsSortMode === 'profit');
+  document.getElementById('products-trend-7d')?.classList.toggle('active', productsTrendRange === '7d');
+  document.getElementById('products-trend-30d')?.classList.toggle('active', productsTrendRange === '30d');
+  document.getElementById('products-trend-metric-qty')?.classList.toggle('active', productsTrendMetric === 'qty');
+  document.getElementById('products-trend-metric-revenue')?.classList.toggle('active', productsTrendMetric === 'revenue');
+  document.getElementById('products-trend-metric-profit')?.classList.toggle('active', productsTrendMetric === 'profit');
+}
+
+function updateProductsPageTitle() {
+  if (currentPage !== 'products') return;
+
+  const refreshLabel = '每5分钟自动刷新';
+  let subtitle = `商品排行分析 · ${refreshLabel}`;
+  if (productsViewMode === 'today') subtitle = `今日热销排行 · ${refreshLabel}`;
+  if (productsViewMode === 'date') subtitle = `${productsViewDate || getMelbourneDateString()} 单日商品表现 · ${refreshLabel}`;
+  if (productsViewMode === 'week') subtitle = `${getWeekRangeLabelFromDateKey(productsViewDate || getMelbourneDateString())} 周商品表现 · ${refreshLabel}`;
+
+  setText('page-title', '热销菜品');
+  setText('page-subtitle', subtitle);
+}
+
 function renderTopItems(scrapedProducts) {
   const el = document.getElementById('top-items');
   if (!el) return;
 
-  const topDishes = scrapedProducts && scrapedProducts.length > 0 ? scrapedProducts.slice(0, 5) : [
-    { rank: 1, name: '重庆豌杂面 Pea Sauce Noodles', qty: 48, amount: 806.40, icon: '🍜', color: '#ef4444' },
-    { rank: 2, name: '红油抄手 Chongqing Spicy Wontons', qty: 42, amount: 705.60, icon: '🥟', color: '#f59e0b' },
-    { rank: 3, name: '招牌牛肉酸辣粉 Braised Beef Glass Noodle', qty: 35, amount: 658.00, icon: '🌶️', color: '#ea580c' },
-    { rank: 4, name: '山城素面 Chongqing Vegetarian Noodles', qty: 29, amount: 400.20, icon: '🍜', color: '#10b981' },
-    { rank: 5, name: '招牌小酥肉 Crispy Fried Pork Strips', qty: 24, amount: 259.20, icon: '🥩', color: '#3b82f6' },
-  ];
+  const topDishes = scrapedProducts && scrapedProducts.length > 0
+    ? scrapedProducts.slice(0, 5)
+    : [];
+
+  if (!topDishes.length) {
+    el.innerHTML = '<div class="sales-empty-state">热销菜品会在 TapTouch 同步完成后显示。</div>';
+    return;
+  }
 
   const maxCount = Math.max(...topDishes.map(d => d.qty || d.count || 1), 1);
 
@@ -2335,47 +2455,605 @@ function renderTopItems(scrapedProducts) {
   }).join('');
 }
 
-function renderProductsPage(products) {
+function renderProductsInsights(analysis) {
+  const el = document.getElementById('products-insights');
+  if (!el) return;
+
+  const champion = analysis?.insights?.champion;
+  const growth = analysis?.insights?.growthLeader;
+  const decline = analysis?.insights?.declineLeader;
+  const concentration = analysis?.insights?.concentration;
+
+  if (!analysis?.current?.products?.length) {
+    el.innerHTML = '<div class="sales-empty-state" style="padding:20px">暂无分析数据</div>';
+    return;
+  }
+
+  const stars = analysis?.menuEngineering?.quadrants?.stars || [];
+  const traffic = analysis?.menuEngineering?.quadrants?.traffic || [];
+  const potential = analysis?.menuEngineering?.quadrants?.potential || [];
+  const weak = analysis?.menuEngineering?.quadrants?.weak || [];
+  const actionTitle = concentration?.top5SharePct >= 60
+    ? '降低爆款依赖'
+    : potential.length
+      ? '放大高利润潜力款'
+      : traffic.length
+        ? '优化高销量低利润款'
+        : '继续放大冠军产品';
+  const actionBody = concentration?.top5SharePct >= 60
+    ? `TOP5 菜品贡献 ${percentText(concentration.top5SharePct, 0)}。参考菜单工程做法，优先把 ${potential[0]?.name || '潜力款'} 放到更高曝光位，并用套餐或加购分散风险。`
+    : potential.length
+      ? `${escapeHtml(potential[0]?.name || '潜力款')} 属于高利润低销量商品，适合放在点餐首屏、加照片或改名测试，提高转化。`
+      : traffic.length
+        ? `${escapeHtml(traffic[0]?.name || '高销量款')} 销量高但利润偏低，建议搭配饮品/小吃加购，或微调份量和配料成本。`
+        : `${stars.length ? `${escapeHtml(stars[0]?.name)} 等明星商品` : '明星商品'} 可以继续作为门店主推，同时用次热销商品承接流量。`;
+
+  const cards = [
+    {
+      title: '🔥 今日冠军',
+      kicker: champion ? `贡献 ${percentText(champion.sharePct, 2)}` : '等待数据',
+      body: champion
+        ? `${escapeHtml(champion.name)} 销量 ${champion.qty} 份，销售额 ${formatCurrency(champion.amount)}，是当前最强引流单品。`
+        : '暂无冠军单品数据。',
+    },
+    {
+      title: '📈 增长最快',
+      kicker: growth ? `${percentText(growth.qtyChangePct, 0)} 增长` : '等待数据',
+      body: growth
+        ? `${escapeHtml(growth.name)} 较上一周期 ${percentText(growth.qtyChangePct, 0)}，建议继续保留曝光位，观察它能否进入稳定热销。`
+        : '暂无明显增长商品。',
+    },
+    {
+      title: '⚠️ 下滑最快',
+      kicker: decline ? `${percentText(decline.qtyChangePct, 0)} 变化` : '等待数据',
+      body: decline
+        ? `${escapeHtml(decline.name)} 较上一周期 ${percentText(decline.qtyChangePct, 0)}，要排查是否受时段、曝光位、缺货或价格影响。`
+        : '暂无明显下滑商品。',
+    },
+    {
+      title: '💡 经营动作',
+      kicker: actionTitle,
+      body: `${actionBody} ${weak.length ? `当前还有 ${weak.length} 个弱势 SKU，可以评估是否下架或限时替换。` : ''}`.trim(),
+    }
+  ];
+
+  el.innerHTML = cards.map(card => `
+    <div class="products-insight-card products-insight-rich-card">
+      <div class="products-insight-title">${card.title}</div>
+      <div class="products-insight-kicker">${card.kicker || ''}</div>
+      <div class="products-insight-body">${card.body}</div>
+    </div>
+  `).join('');
+}
+
+function renderProductsKpis(analysis) {
+  const statsGrid = document.getElementById('products-stats-grid');
+  if (!statsGrid) return;
+
+  if (!analysis?.kpis) {
+    statsGrid.innerHTML = [
+      ['总销量', '--份', '等待同步后显示较上一周期变化'],
+      ['销售额', '--', '等待同步后显示营收变化'],
+      ['SKU动销率', '-- / --', '等待同步后显示有销售记录的SKU占比'],
+      ['冠军贡献度', '--', '等待同步后显示冠军单品贡献'],
+    ].map(([label, value, sub]) => `
+      <div class="products-stat-card">
+        <div class="products-stat-label">${label}</div>
+        <div class="products-stat-value">${value}</div>
+        <div class="products-stat-sub neutral">${sub}</div>
+      </div>
+    `).join('');
+    return;
+  }
+
+  const qty = analysis.kpis.totalQty;
+  const revenue = analysis.kpis.totalRevenue;
+  const active = analysis.kpis.activeSkuRate;
+  const champion = analysis.kpis.championShare;
+
+  const cards = [
+    {
+      label: '总销量',
+      value: `${qty.value}份`,
+      sub: `${analysis.comparisonLabel} ${percentText(Math.abs(qty.changePct), 1)} ${trendArrow(qty.changePct)}`,
+      cls: trendClass(qty.changePct),
+    },
+    {
+      label: '销售额',
+      value: formatCurrency(revenue.value),
+      sub: `${analysis.comparisonLabel} ${percentText(Math.abs(revenue.changePct), 1)} ${trendArrow(revenue.changePct)}`,
+      cls: trendClass(revenue.changePct),
+    },
+    {
+      label: 'SKU动销率',
+      value: `${active.active} / ${active.total}`,
+      sub: `${percentText(active.pct, 0)} · 有销售记录的SKU占全部SKU比例`,
+      cls: 'neutral',
+    },
+    {
+      label: '冠军贡献度',
+      value: percentText(champion.pct, 2),
+      sub: champion.name || '暂无冠军单品',
+      cls: 'neutral',
+    },
+  ];
+
+  statsGrid.innerHTML = cards.map(card => `
+    <div class="products-stat-card">
+      <div class="products-stat-label">${card.label}</div>
+      <div class="products-stat-value">${card.value}</div>
+      <div class="products-stat-sub ${card.cls}">${card.sub}</div>
+    </div>
+  `).join('');
+}
+
+function getActiveProductRanking(analysis) {
+  if (!analysis?.rankings) return [];
+  if (productsSortMode === 'revenue') return analysis.rankings.byRevenue || [];
+  if (productsSortMode === 'profit') return analysis.rankings.byProfit || [];
+  return analysis.rankings.byQty || [];
+}
+
+function getVisibleProductRanking(list = []) {
+  return productsRankingExpanded ? list : list.slice(0, 5);
+}
+
+function renderProductsLoadingState(mode = productsViewMode, dateKey = productsViewDate || getMelbourneDateString()) {
+  productsReportLoading = true;
+  activeProductsReport = null;
+  updateProductsControls();
+  updateProductsPageTitle();
+
+  const periodLabel = getProductsPeriodLabel(mode, dateKey);
+  const reportSub = document.getElementById('products-report-sub');
+  const listSub = document.getElementById('products-list-sub');
+  const list = document.getElementById('products-list');
+  const insights = document.getElementById('products-insights');
+  const engineering = document.getElementById('products-menu-engineering');
+  const concentrationCopy = document.getElementById('products-concentration-copy');
+  const category = document.getElementById('products-category-analysis');
+  const profit = document.getElementById('products-profit-board');
+  const trendSub = document.getElementById('products-trend-sub');
+
+  if (reportSub) reportSub.textContent = `${periodLabel} · 正在分析商品数据`;
+  if (listSub) listSub.textContent = `正在切换到${getProductsSortLabel()}视角，请稍候`;
+
+  renderProductsKpis(null);
+
+  if (list) {
+    list.innerHTML = `
+      <div class="products-loading-block">
+        <div class="products-loading-title">正在分析 ${escapeHtml(periodLabel)} 的热销结构...</div>
+        <div class="products-loading-sub">会先清空旧数据，避免你看到上一天的结果。</div>
+        <div class="products-loading-rows">
+          <div class="products-skeleton-row"></div>
+          <div class="products-skeleton-row"></div>
+          <div class="products-skeleton-row"></div>
+          <div class="products-skeleton-row"></div>
+        </div>
+      </div>
+    `;
+  }
+  if (insights) insights.innerHTML = '<div class="products-loading-note">AI 正在重新判断冠军、增长、下滑和经营动作...</div>';
+  if (engineering) engineering.innerHTML = '<div class="products-loading-note">正在重算菜单工程象限...</div>';
+  if (concentrationCopy) concentrationCopy.innerHTML = '<div class="products-loading-note">正在分析销售集中度与经营风险...</div>';
+  if (category) category.innerHTML = '<div class="products-loading-note">正在汇总品类贡献结构...</div>';
+  if (profit) profit.innerHTML = '<div class="products-loading-note">正在计算利润贡献 TOP5...</div>';
+  if (trendSub) trendSub.textContent = '正在生成趋势曲线';
+  renderProductsTrend(null);
+  renderProductsConcentration(null);
+}
+
+function renderProductsErrorState(error) {
+  productsReportLoading = false;
+  updateProductsControls();
+
+  const message = escapeHtml(error?.message || '商品分析加载失败');
+  const list = document.getElementById('products-list');
+  const insights = document.getElementById('products-insights');
+
+  renderProductsKpis(null);
+  renderProductsMenuEngineering(null);
+  renderProductsConcentration(null);
+  renderProductsTrend(null);
+  renderProductsCategoryAnalysis(null);
+  renderProductsProfitBoard(null);
+
+  if (list) {
+    list.innerHTML = `<div class="sales-empty-state" style="padding:24px;text-align:center">商品报表加载失败：${message}</div>`;
+  }
+  if (insights) {
+    insights.innerHTML = `<div class="sales-empty-state" style="padding:20px">AI 洞察暂时不可用：${message}</div>`;
+  }
+}
+
+function renderProductsRanking(analysis) {
   const el = document.getElementById('products-list');
   if (!el) return;
 
-  const list = products && products.length > 0 ? products : [
-    { rank: 1, name: '重庆豌杂面 Pea Sauce Noodles', qty: 48, amount: 806.40 },
-    { rank: 2, name: '红油抄手 Chongqing Spicy Wontons', qty: 42, amount: 705.60 },
-    { rank: 3, name: '招牌牛肉酸辣粉 Braised Beef Glass Noodle', qty: 35, amount: 658.00 },
-    { rank: 4, name: '山城素面 Chongqing Vegetarian Noodles', qty: 29, amount: 400.20 },
-    { rank: 5, name: '招牌小酥肉 Crispy Fried Pork Strips', qty: 24, amount: 259.20 },
-    { rank: 6, name: '套餐3 Combo3', qty: 18, amount: 536.40 },
-    { rank: 7, name: '甘蔗汁 Sugarcane Juice', qty: 15, amount: 139.50 },
-    { rank: 8, name: '炸臭豆腐 Fried Stinky Tofu (6pcs)', qty: 12, amount: 123.60 },
-    { rank: 9, name: '锅巴土豆 Crispy Rice Crust Potatoes', qty: 10, amount: 68.00 },
-  ];
+  const reportSub = document.getElementById('products-report-sub');
+  const listSub = document.getElementById('products-list-sub');
+  const list = getActiveProductRanking(analysis);
 
-  const maxQty = Math.max(...list.map(p => p.qty), 1);
+  if (reportSub) {
+    const mode = analysis?.mode || productsViewMode || 'today';
+    const periodLabel = analysis?.current?.label
+      || (mode === 'week'
+        ? getWeekRangeLabelFromDateKey(productsViewDate || getMelbourneDateString())
+        : '等待同步');
+    if (mode === 'week') {
+      reportSub.textContent = `${periodLabel} · 周商品销售与排行分析`;
+    } else if (mode === 'date') {
+      reportSub.textContent = `${periodLabel} · 单日商品销售与排行分析`;
+    } else {
+      reportSub.textContent = `${periodLabel} · 今日商品销售与排行分析`;
+    }
+  }
+  if (listSub) {
+    if (productsSortMode === 'revenue') {
+      listSub.textContent = '按销售额排序，辅助判断真正带动营收的产品';
+    } else if (productsSortMode === 'profit') {
+      listSub.textContent = '按利润排序，优先识别最赚钱的产品';
+    } else {
+      listSub.textContent = '按销量排序，识别最受欢迎的产品';
+    }
+  }
+
+  if (!list.length) {
+    el.innerHTML = '<div class="sales-empty-state" style="padding:16px 20px">暂无实时热销菜品数据，请先完成 TapTouch 同步。</div>';
+    return;
+  }
+
+  const visibleList = getVisibleProductRanking(list);
+
+  const totalBase = productsSortMode === 'revenue'
+    ? Math.max(1, list.reduce((sum, product) => sum + (Number(product.amount) || 0), 0))
+    : productsSortMode === 'profit'
+      ? Math.max(1, list.reduce((sum, product) => sum + (Number(product.profit) || 0), 0))
+      : Math.max(1, list.reduce((sum, product) => sum + (Number(product.qty) || 0), 0));
+
+  const maxBar = Math.max(...list.map(product => {
+    if (productsSortMode === 'revenue') return Number(product.amount) || 0;
+    if (productsSortMode === 'profit') return Number(product.profit) || 0;
+    return Number(product.qty) || 0;
+  }), 1);
 
   el.innerHTML = `
-    <div style="display:flex;flex-direction:column;gap:10px;padding:8px 12px">
-      ${list.map(p => `
-        <div class="top-item-premium" style="flex-direction:row;align-items:center;justify-content:space-between;padding:12px 16px">
-          <div style="display:flex;align-items:center;gap:12px;flex:1;min-width:0">
-            <div class="top-item-rank-badge" style="background:rgba(99,102,241,0.1);color:var(--blue);border:1px solid rgba(99,102,241,0.2)">
-              ${p.rank || '-'}
+    <div class="products-ranking-stack">
+      <div class="products-ranking-meta">
+        <div class="products-ranking-chip">当前按${getProductsSortLabel()}排序</div>
+        <div class="products-ranking-chip">${productsRankingExpanded ? `展示全部 ${list.length} 个 SKU` : `默认展开前 ${visibleList.length} 名`}</div>
+      </div>
+      ${visibleList.map((p, index) => {
+        const primaryValue = productsSortMode === 'revenue'
+          ? Number(p.amount) || 0
+          : productsSortMode === 'profit'
+            ? Number(p.profit) || 0
+            : Number(p.qty) || 0;
+        const sharePct = totalBase > 0 ? (primaryValue / totalBase) * 100 : 0;
+        const barPct = maxBar > 0 ? (primaryValue / maxBar) * 100 : 0;
+        const compared = (analysis?.current?.productsCompared || []).find(item => item.name === p.name) || p;
+        const changePct = productsSortMode === 'revenue'
+          ? compared.amountChangePct
+          : productsSortMode === 'profit'
+            ? compared.profitChangePct
+            : compared.qtyChangePct;
+
+        return `
+        <div class="products-ranking-row">
+          <div class="products-ranking-main">
+            <div class="products-ranking-badge">
+              ${medalForRank(index + 1)}
             </div>
-            <div style="min-width:0;flex:1">
-              <div style="font-size:13px;font-weight:600;color:var(--text-1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(p.name)}</div>
-              <div style="font-size:11px;color:var(--text-3);margin-top:2px">${p.qty} 份 sold</div>
+            <div class="products-ranking-copy">
+              <div class="products-ranking-name">${escapeHtml(p.name)}</div>
+              <div class="products-ranking-sub">${p.qty} 份 · ${formatCurrency(p.amount)} · 销售占比 ${percentText((Number(p.sharePct) || sharePct), 1)}</div>
             </div>
           </div>
-          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
-            <div style="font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;color:var(--text-1)">$${(p.amount || 0).toFixed(2)}</div>
-            <div class="top-item-progress-track" style="width:100px;margin-top:2px">
-              <div class="top-item-progress-fill" style="width:${Math.round(p.qty / maxQty * 100)}%;background:linear-gradient(90deg,var(--blue),var(--cyan))"></div>
+          <div class="products-ranking-side">
+            <div class="products-ranking-value">
+              ${productsSortMode === 'revenue' ? formatCurrency(p.amount) : productsSortMode === 'profit' ? formatCurrency(p.profit) : `${p.qty}份`}
+            </div>
+            <div class="products-stat-sub ${trendClass(changePct || 0)}">${percentText(Math.abs(changePct || 0), 1)} ${trendArrow(changePct || 0)}</div>
+            <div class="products-ranking-bar">
+              <div class="products-ranking-bar-fill" style="width:${barPct}%"></div>
             </div>
           </div>
-        </div>
-      `).join('')}
+        </div>`;
+      }).join('')}
+      ${list.length > visibleList.length ? `<div class="products-ranking-collapsed-note">还有 ${list.length - visibleList.length} 个 SKU 已折叠，点击右上角“展开全部”查看。</div>` : ''}
     </div>
   `;
+}
+
+function renderProductsMenuEngineering(analysis) {
+  const el = document.getElementById('products-menu-engineering');
+  if (!el) return;
+  const menu = analysis?.menuEngineering;
+  if (!menu) {
+    el.innerHTML = '<div class="sales-empty-state" style="padding:20px">暂无菜单工程分析</div>';
+    return;
+  }
+
+  const groups = [
+    ['明星产品', '高销量 · 高利润', menu.quadrants?.stars || []],
+    ['引流产品', '高销量 · 低利润', menu.quadrants?.traffic || []],
+    ['潜力产品', '低销量 · 高利润', menu.quadrants?.potential || []],
+    ['问题产品', '低销量 · 低利润', menu.quadrants?.weak || []],
+  ];
+
+  el.innerHTML = groups.map(([title, sub, items]) => `
+    <div class="products-engineering-card">
+      <div class="products-engineering-title">${title}</div>
+      <div class="products-engineering-sub">${sub}</div>
+      <div class="products-chip-list">
+        ${items.length ? items.map(item => `
+          <span class="products-chip">${escapeHtml(item.name)}</span>
+        `).join('') : '<span class="sales-empty-state">暂无</span>'}
+      </div>
+    </div>
+  `).join('');
+}
+
+function renderProductsConcentration(analysis) {
+  const copy = document.getElementById('products-concentration-copy');
+  const canvas = document.getElementById('products-concentration-chart');
+  if (!copy || !canvas) return;
+
+  const concentration = analysis?.insights?.concentration;
+  if (!concentration) {
+    if (productsConcentrationChartInst) {
+      productsConcentrationChartInst.destroy();
+      productsConcentrationChartInst = null;
+    }
+    copy.innerHTML = '<div class="sales-empty-state" style="padding:12px">暂无集中度数据</div>';
+    return;
+  }
+
+  copy.innerHTML = `
+    <div class="products-insight-card">
+      <div class="products-insight-title">TOP5 菜品</div>
+      <div class="products-insight-body">${percentText(concentration.top5SharePct, 0)} · ${formatCurrency(concentration.top5Revenue)}</div>
+    </div>
+    <div class="products-insight-card">
+      <div class="products-insight-title">其它菜品</div>
+      <div class="products-insight-body">${percentText(concentration.otherSharePct, 0)} · ${formatCurrency(concentration.otherRevenue)}</div>
+    </div>
+    <div class="products-insight-card">
+      <div class="products-insight-title">经营提示</div>
+      <div class="products-insight-body">
+        ${concentration.riskLevel === 'high'
+          ? '销售集中度偏高，建议丰富长尾产品销售，降低经营风险。'
+          : concentration.riskLevel === 'medium'
+            ? '销售集中度适中，可以继续强化爆款，同时推动次热销产品。'
+            : '菜单结构较分散，建议集中资源打造更强爆款。'}
+      </div>
+    </div>
+  `;
+
+  if (productsConcentrationChartInst) productsConcentrationChartInst.destroy();
+  const ctx = canvas.getContext('2d');
+  productsConcentrationChartInst = new Chart(ctx, {
+    type: 'doughnut',
+    data: {
+      labels: ['TOP5 菜品', '其它菜品'],
+      datasets: [{
+        data: [concentration.top5Revenue, concentration.otherRevenue],
+        backgroundColor: ['#3b82f6', '#cbd5e1'],
+        borderWidth: 0,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      cutout: '68%',
+    },
+  });
+}
+
+function renderProductsTrend(analysis) {
+  const canvas = document.getElementById('products-trend-chart');
+  const sub = document.getElementById('products-trend-sub');
+  if (!canvas) return;
+
+  const pack = productsTrendRange === '30d' ? analysis?.trends?.range30 : analysis?.trends?.range7;
+  if (!pack) {
+    if (productsTrendChartInst) {
+      productsTrendChartInst.destroy();
+      productsTrendChartInst = null;
+    }
+    if (sub) sub.textContent = '等待趋势数据';
+    return;
+  }
+
+  const metricMap = {
+    qty: { key: 'qty', label: '销量趋势' },
+    revenue: { key: 'revenue', label: '销售额趋势' },
+    profit: { key: 'profit', label: '利润趋势' },
+  };
+  const selected = metricMap[productsTrendMetric] || metricMap.qty;
+  const series = pack[selected.key] || [];
+  if (sub) sub.textContent = `${productsTrendRange === '30d' ? '近30天' : '近7天'} · TOP5 菜品${selected.label}`;
+
+  if (productsTrendChartInst) productsTrendChartInst.destroy();
+  const ctx = canvas.getContext('2d');
+  const palette = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
+  productsTrendChartInst = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: pack.labels,
+      datasets: series.map((item, index) => ({
+        label: item.name,
+        data: item.data,
+        borderColor: palette[index % palette.length],
+        backgroundColor: palette[index % palette.length],
+        tension: 0.35,
+        fill: false,
+      })),
+    },
+    options: chartOptions(productsTrendMetric === 'qty' ? '' : '$'),
+  });
+}
+
+function renderProductsCategoryAnalysis(analysis) {
+  const el = document.getElementById('products-category-analysis');
+  if (!el) return;
+
+  const list = analysis?.categoryAnalysis || [];
+  if (!list.length) {
+    el.innerHTML = '<div class="sales-empty-state" style="padding:20px">暂无品类分析</div>';
+    return;
+  }
+
+  el.innerHTML = list.map(item => `
+    <div class="products-category-row">
+      <div class="products-category-top">
+        <div class="products-category-name">${escapeHtml(item.category)}</div>
+        <div class="products-stat-sub">${item.skuCount} SKU</div>
+      </div>
+      <div class="products-category-metrics">
+        <div class="products-category-metric"><strong>${percentText(item.qtySharePct, 0)}</strong>销量占比</div>
+        <div class="products-category-metric"><strong>${percentText(item.revenueSharePct, 0)}</strong>销售额占比</div>
+        <div class="products-category-metric"><strong>${percentText(item.profitSharePct, 0)}</strong>利润占比</div>
+      </div>
+    </div>
+  `).join('');
+}
+
+function renderProductsProfitBoard(analysis) {
+  const el = document.getElementById('products-profit-board');
+  if (!el) return;
+
+  const rows = analysis?.profitLeaders || [];
+  if (!rows.length) {
+    el.innerHTML = '<div class="sales-empty-state" style="padding:20px">暂无利润榜</div>';
+    return;
+  }
+
+  el.innerHTML = rows.map((item, index) => `
+    <div class="products-profit-row">
+      <div class="products-profit-main">
+        <div class="products-profit-title">${escapeHtml(item.name)}</div>
+        <div class="products-profit-rank">${medalForRank(index + 1)} · ${item.qty} 份</div>
+      </div>
+      <div class="products-profit-metric"><strong>${formatCurrency(item.amount)}</strong>销售额</div>
+      <div class="products-profit-metric"><strong>${formatCurrency(item.cost)}</strong>成本</div>
+      <div class="products-profit-metric"><strong>${formatCurrency(item.profit)}</strong>利润</div>
+      <div class="products-profit-metric"><strong>${percentText(item.marginPct, 0)}</strong>利润率</div>
+    </div>
+  `).join('');
+}
+
+function renderProductsPage(analysis) {
+  productsReportLoading = false;
+  activeProductsReport = analysis || null;
+  updateProductsControls();
+  updateProductsPageTitle();
+  renderProductsKpis(analysis);
+  renderProductsRanking(analysis);
+  renderProductsInsights(analysis);
+  renderProductsMenuEngineering(analysis);
+  renderProductsConcentration(analysis);
+  renderProductsTrend(analysis);
+  renderProductsCategoryAnalysis(analysis);
+  renderProductsProfitBoard(analysis);
+}
+
+async function loadProductsReport(options = {}) {
+  const mode = options.mode || productsViewMode || 'today';
+  const dateKey = options.dateKey || productsViewDate || getMelbourneDateString();
+  const requestId = ++productsReportRequestId;
+
+  productsViewMode = mode;
+  productsViewDate = mode === 'today' ? getMelbourneDateString() : dateKey;
+  renderProductsLoadingState(mode, productsViewDate);
+
+  if (mode === 'today' && cachedProductsToday && cachedProductsToday.source && cachedProductsToday.source !== 'empty') {
+    renderProductsPage(cachedProductsToday);
+    return;
+  }
+
+  try {
+    const query = new URLSearchParams({ mode });
+    if (mode !== 'today') query.set('date', productsViewDate);
+    const response = await fetch(`${CONFIG.apiBase}/api/products/analysis?${query.toString()}`);
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || `HTTP ${response.status}`);
+    }
+
+    const report = await response.json();
+    if (requestId !== productsReportRequestId) return;
+
+    if (mode === 'today') cachedProductsToday = report;
+    renderProductsPage(report);
+  } catch (error) {
+    if (requestId !== productsReportRequestId) return;
+    renderProductsErrorState(error);
+  }
+}
+
+function setProductsViewMode(mode = 'today') {
+  const normalized = ['today', 'date', 'week'].includes(mode) ? mode : 'today';
+  const todayKey = getMelbourneDateString();
+  const fallbackDate = normalized === 'today'
+    ? todayKey
+    : (productsViewDate || todayKey);
+  loadProductsReport({ mode: normalized, dateKey: fallbackDate });
+}
+
+function handleProductsDateChange(value) {
+  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(String(value || ''))
+    ? String(value)
+    : getMelbourneDateString();
+  const nextMode = normalized === getMelbourneDateString() && productsViewMode === 'today'
+    ? 'today'
+    : (productsViewMode === 'today' ? 'date' : productsViewMode);
+  loadProductsReport({ mode: nextMode, dateKey: normalized });
+}
+
+function shiftProductsDate(delta = 0) {
+  const current = productsViewDate || getMelbourneDateString();
+  const [y, m, d] = current.split('-').map(Number);
+  const next = new Date(y, m - 1, d);
+  next.setDate(next.getDate() + delta * (productsViewMode === 'week' ? 7 : 1));
+
+  const normalized = [
+    next.getFullYear(),
+    String(next.getMonth() + 1).padStart(2, '0'),
+    String(next.getDate()).padStart(2, '0'),
+  ].join('-');
+
+  if (normalized > getMelbourneDateString()) return;
+  loadProductsReport({
+    mode: normalized === getMelbourneDateString() ? 'today' : (productsViewMode === 'today' ? 'date' : productsViewMode),
+    dateKey: normalized,
+  });
+}
+
+function setProductsSortMode(mode = 'qty') {
+  productsSortMode = ['qty', 'revenue', 'profit'].includes(mode) ? mode : 'qty';
+  updateProductsControls();
+  renderProductsRanking(activeProductsReport);
+}
+
+function toggleProductsRankingExpanded() {
+  productsRankingExpanded = !productsRankingExpanded;
+  updateProductsControls();
+  renderProductsRanking(activeProductsReport);
+}
+
+function setProductsTrendRange(range = '7d') {
+  productsTrendRange = range === '30d' ? '30d' : '7d';
+  updateProductsControls();
+  renderProductsTrend(activeProductsReport);
+}
+
+function setProductsTrendMetric(metric = 'qty') {
+  productsTrendMetric = ['qty', 'revenue', 'profit'].includes(metric) ? metric : 'qty';
+  updateProductsControls();
+  renderProductsTrend(activeProductsReport);
 }
 
 // ============================================================
@@ -2570,7 +3248,7 @@ function showPage(page) {
     cameras:   ['摄像头监控', `实时画面 · ${refreshLabel}`],
     sales:     ['营销报表', `${salesModeLabel} · 今日 ${cachedSummary ? '$'+cachedSummary.totalRevenue : '--'} | ${cachedSummary?.totalOrders || '--'} 单 · ${refreshLabel}`],
     orders:    ['订单记录', `共 ${allOrdersCache.length} 笔 — 点击查看详情 · ${refreshLabel}`],
-    products:  ['热销菜品', `今日排行 · ${refreshLabel}`],
+    products:  ['热销菜品', `商品排行分析 · ${refreshLabel}`],
   };
   const [t, s] = titles[page] || ['', ''];
   setText('page-title', t);
@@ -2589,6 +3267,11 @@ function showPage(page) {
     updateOrdersViewLabels();
     syncOrdersDateControls(false);
   }
+  if (page === 'products') {
+    updateProductsPageTitle();
+    updateProductsControls();
+    loadProductsReport({ mode: productsViewMode, dateKey: productsViewDate || getMelbourneDateString() });
+  }
 
   const activePanel = document.getElementById(`page-${page}`);
   if (activePanel) {
@@ -2599,6 +3282,10 @@ function showPage(page) {
 
 function toggleSidebar() {
   document.getElementById('sidebar')?.classList.toggle('collapsed');
+  requestAnimationFrame(() => {
+    renderCameraStrip();
+    window.dispatchEvent(new Event('resize'));
+  });
 }
 
 function showSettings() {
@@ -2638,6 +3325,7 @@ function startCountdown() {
 let cachedSummary     = null;
 let cachedSalesHourly = [];
 let cookieRefreshRunning = false;
+let pageOpenSyncPromise = null;
 
 
 async function refreshData() {
@@ -2647,10 +3335,12 @@ async function refreshData() {
 
   try {
     const { hourly, summary, orders } = await fetchLiveData();
+    const hasLiveData = !!summary?.hasLiveData;
 
     currentSalesData  = hourly;
     currentPayments   = summary.payments || [];
     cachedSummary     = summary;
+    cachedProductsToday = null;
     cachedSalesHourly = Array.isArray(hourly) ? hourly : [];
     todayOrdersCache  = Array.isArray(orders) ? orders : [];
     allOrdersCache    = todayOrdersCache;
@@ -2665,7 +3355,11 @@ async function refreshData() {
     renderOrders(orders.slice(0, 10));  // Show latest 10 on dashboard
     renderPerf(hourly);
     renderTopItems(summary.products);
-    renderProductsPage(summary.products);
+    if (currentPage === 'products' && productsViewMode === 'today') {
+      loadProductsReport({ mode: 'today', dateKey: todayDateKey });
+    } else if (currentPage === 'products') {
+      updateProductsPageTitle();
+    }
 
     if (selectedOrdersDate === todayDateKey) {
       renderOrdersPage(orders, {
@@ -2689,16 +3383,22 @@ async function refreshData() {
 
     // Status
     serverOnline = true;
-    if (syncDot) syncDot.classList.add('live');
-    if (statusBar) statusBar.textContent = 'TapTouch 实时数据';
+    if (syncDot) syncDot.classList.toggle('live', hasLiveData);
+    if (statusBar) statusBar.textContent = hasLiveData ? 'TapTouch 实时数据' : '等待 TapTouch 同步';
 
-    const now = new Intl.DateTimeFormat('en-AU', {
-      timeZone: 'Australia/Melbourne',
-      hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false,
-    }).format(new Date());
-    setText('last-updated', `最后更新: ${now}`);
-    setText('chart-sub', `TapTouch 真实数据 — 抓取于 ${(summary.scrapedAt || '').replace('T',' ').substring(0,16)} · 每5分钟自动刷新`);
-    if (footer) footer.textContent = 'TapTouch 真实数据';
+    if (hasLiveData) {
+      const now = new Intl.DateTimeFormat('en-AU', {
+        timeZone: 'Australia/Melbourne',
+        hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false,
+      }).format(new Date());
+      setText('last-updated', `最后更新: ${now}`);
+      setText('chart-sub', `TapTouch 真实数据 — 抓取于 ${(summary.scrapedAt || '').replace('T',' ').substring(0,16)} · 每5分钟自动刷新`);
+      if (footer) footer.textContent = 'TapTouch 真实数据';
+    } else {
+      setText('last-updated', '最后更新: 等待首次同步');
+      setText('chart-sub', '当前为初始空数据，请运行“从 TapTouch 同步”后加载真实营业数据');
+      if (footer) footer.textContent = '等待 TapTouch 同步';
+    }
 
   } catch (err) {
     console.error('[App] refreshData failed:', err.message);
@@ -2729,6 +3429,39 @@ function setRefreshButtonState(isRunning) {
   if (btn) btn.disabled = !!isRunning;
   if (icon) icon.classList.toggle('spinning', !!isRunning);
   if (text) text.textContent = isRunning ? '刷新中...' : '刷新';
+}
+
+function showSyncToast(title, log) {
+  const toast = document.getElementById('scrape-toast');
+  const spinner = document.getElementById('scrape-spinner');
+  const toastTitle = document.getElementById('scrape-toast-title');
+  const toastLog = document.getElementById('scrape-toast-log');
+
+  if (spinner) {
+    spinner.classList.remove('done');
+    spinner.style.borderColor = '';
+    spinner.style.borderTopColor = '';
+  }
+  if (toastTitle) toastTitle.textContent = title;
+  if (toastLog) toastLog.textContent = log;
+  toast?.classList.add('visible');
+}
+
+function updateSyncToast(title, log) {
+  const toastTitle = document.getElementById('scrape-toast-title');
+  const toastLog = document.getElementById('scrape-toast-log');
+  if (toastTitle) toastTitle.textContent = title;
+  if (toastLog) toastLog.textContent = log;
+}
+
+function markSyncToastDone(title, log, isError = false) {
+  const spinner = document.getElementById('scrape-spinner');
+  if (spinner) {
+    spinner.style.borderColor = isError ? 'rgba(239,68,68,0.3)' : '';
+    spinner.style.borderTopColor = isError ? '#ef4444' : '';
+    spinner.classList.add('done');
+  }
+  updateSyncToast(title, log);
 }
 
 async function triggerCookieRefresh() {
@@ -2776,6 +3509,116 @@ async function triggerCookieRefresh() {
     cookieRefreshRunning = false;
     setRefreshButtonState(false);
   }
+}
+
+async function waitForPageOpenSyncCompletion() {
+  let coreDataRefreshed = false;
+
+  for (let i = 0; i < 60; i += 1) {
+    try {
+      const scrapeState = await fetch(`${CONFIG.apiBase}/api/scrape/status`).then(r => r.json());
+      const detailProgress = scrapeState.detailTotal ? `${scrapeState.detailReady || 0}/${scrapeState.detailTotal}` : '';
+
+      if (scrapeState.coreReady && !coreDataRefreshed) {
+        coreDataRefreshed = true;
+        updateSyncToast(
+          '⚡ 自动同步中，核心数据已更新',
+          detailProgress ? `订单详情已就绪 ${detailProgress}` : '订单详情后台补齐中'
+        );
+        await refreshData();
+      }
+
+      if (scrapeState.running) {
+        updateSyncToast(
+          scrapeState.coreReady ? '⚡ 自动同步中，核心数据已更新' : '正在自动从 TapTouch 同步...',
+          scrapeState.coreReady
+            ? (detailProgress ? `后台继续补齐，订单详情 ${detailProgress}` : '后台继续补齐订单详情...')
+            : (scrapeState.lastLog || '处理中...')
+        );
+      }
+
+      if (!scrapeState.running) {
+        if (scrapeState.error) {
+          throw new Error(scrapeState.error || 'TapTouch sync failed');
+        }
+        await refreshData();
+        markSyncToastDone(
+          '✅ 自动同步完成',
+          detailProgress ? `订单详情已就绪 ${detailProgress}` : 'TapTouch 数据已刷新'
+        );
+        setTimeout(hideScrapeToast, 2500);
+        return true;
+      }
+    } catch (error) {
+      if (i === 59) throw error;
+    }
+
+    await new Promise(resolve => setTimeout(resolve, 2000));
+  }
+
+  throw new Error('TapTouch sync timed out');
+}
+
+async function autoSyncOnPageOpen() {
+  if (pageOpenSyncPromise) return pageOpenSyncPromise;
+
+  pageOpenSyncPromise = (async () => {
+    const statusBar = document.getElementById('sync-label');
+    const footer = document.getElementById('footer-data-source');
+
+    if (statusBar) statusBar.textContent = '页面已打开，正在自动同步...';
+    if (footer) footer.textContent = '正在自动同步 TapTouch';
+    showSyncToast('页面已打开，正在自动同步...', '准备获取最新 TapTouch 数据...');
+
+    try {
+      const response = await fetch(`${CONFIG.apiBase}/api/auto-sync/run`, { method: 'POST' });
+      const payload = await response.json().catch(() => ({}));
+
+      if (response.ok && payload.ok !== false) {
+        updateSyncToast('⚡ 自动同步中', '正在使用当前 Cookie 获取最新数据...');
+        await refreshData();
+        markSyncToastDone('✅ 自动同步完成', '已使用当前 Cookie 获取最新数据');
+        setTimeout(hideScrapeToast, 2500);
+        return true;
+      }
+
+      if (response.status === 409 || /正在运行|请稍后再试/i.test(payload.error || '')) {
+        updateSyncToast('页面已打开，正在自动同步...', '已有同步任务在运行，正在等待结果...');
+        await waitForPageOpenSyncCompletion();
+        return true;
+      }
+
+      if (payload.needRelogin) {
+        updateSyncToast('正在自动从 TapTouch 同步...', '当前 Cookie 已失效，准备重新登录 TapTouch...');
+        const scrapeResp = await fetch(`${CONFIG.apiBase}/api/scrape/run`, { method: 'POST' });
+        const scrapePayload = await scrapeResp.json().catch(() => ({}));
+
+        if (!scrapeResp.ok) {
+          throw new Error(scrapePayload.error || `HTTP ${scrapeResp.status}`);
+        }
+
+        if (scrapePayload.ok === false && !/正在运行/.test(scrapePayload.message || '')) {
+          throw new Error(scrapePayload.message || 'TapTouch sync failed');
+        }
+
+        await waitForPageOpenSyncCompletion();
+        return true;
+      }
+
+      throw new Error(payload.error || `HTTP ${response.status}`);
+    } catch (error) {
+      console.error('[App] autoSyncOnPageOpen failed:', error.message);
+      if (statusBar) statusBar.textContent = '⚠️ 自动同步失败，请手动重试';
+      if (footer) footer.textContent = '自动同步失败';
+      markSyncToastDone('❌ 自动同步失败', error.message || '请手动重试', true);
+      setTimeout(hideScrapeToast, 5000);
+      return false;
+    } finally {
+      pageOpenSyncPromise = null;
+    }
+  })();
+
+  return pageOpenSyncPromise;
 }
 
 // ============================================================
@@ -2895,6 +3738,7 @@ function hideScrapeToast() {
 async function init() {
   setText('store-name-sidebar', CONFIG.restaurantName);
   selectedOrdersDate = getMelbourneDateString();
+  productsViewDate = getMelbourneDateString();
 
   try {
     const savedThemePref = localStorage.getItem(THEME_PREF_KEY) || 'light';
@@ -2914,9 +3758,10 @@ async function init() {
   showPage(currentPage);
 
   renderTopItems();
-  renderProductsPage();
+  renderProductsPage(null);
   // Load real data immediately
   await refreshData();
+  await autoSyncOnPageOpen();
 }
 
 document.addEventListener('DOMContentLoaded', init);

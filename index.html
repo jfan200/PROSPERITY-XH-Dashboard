@@ -517,12 +517,148 @@
 
     <!-- ===== PAGE: PRODUCTS ===== -->
     <main class="page-content hidden" id="page-products">
-      <div class="chart-card">
-        <div class="chart-card-header"><div class="chart-card-title">热销菜品排行</div></div>
-        <div id="products-list" style="padding:8px 0">
-          <div style="color:var(--text-3);font-size:12px;padding:24px;text-align:center">同步数据后显示</div>
+      <section class="products-page-shell">
+        <div class="chart-card products-hero-card">
+          <div class="products-hero-top">
+            <div>
+              <div class="chart-card-title">热销菜品分析</div>
+              <div class="chart-card-sub" id="products-report-sub">支持按单日与按周查看 TapTouch 商品表现</div>
+            </div>
+            <div class="products-toolbar">
+              <div class="products-mode-switch">
+                <button class="ctype-btn active" id="products-mode-today" onclick="setProductsViewMode('today')">回到今天</button>
+                <button class="ctype-btn" id="products-mode-date" onclick="setProductsViewMode('date')">单日</button>
+                <button class="ctype-btn" id="products-mode-week" onclick="setProductsViewMode('week')">本周</button>
+              </div>
+              <div class="products-date-tools">
+                <button class="orders-date-nav-btn" onclick="shiftProductsDate(-1)" aria-label="上一天">‹</button>
+                <div class="orders-date-input-wrap">
+                  <span class="orders-date-icon">📅</span>
+                  <input class="orders-date-input-field" id="products-date-input" type="date" onchange="handleProductsDateChange(this.value)" />
+                </div>
+                <button class="orders-date-nav-btn" onclick="shiftProductsDate(1)" aria-label="下一天">›</button>
+              </div>
+            </div>
+          </div>
+          <div class="products-stats-grid" id="products-stats-grid">
+            <div class="sales-empty-state">同步后显示商品分析数据</div>
+          </div>
         </div>
-      </div>
+
+          <div class="products-content-grid">
+          <div class="chart-card">
+            <div class="chart-card-header">
+              <div>
+                <div class="chart-card-title">热销排行榜</div>
+                <div class="chart-card-sub" id="products-list-sub">按销量与销售额综合排序</div>
+              </div>
+              <div class="products-header-actions">
+                <div class="products-mode-switch">
+                  <button class="ctype-btn active" id="products-sort-qty" onclick="setProductsSortMode('qty')">销量排行</button>
+                  <button class="ctype-btn" id="products-sort-revenue" onclick="setProductsSortMode('revenue')">销售额排行</button>
+                  <button class="ctype-btn" id="products-sort-profit" onclick="setProductsSortMode('profit')">利润排行</button>
+                </div>
+                <button class="products-collapse-btn" id="products-ranking-toggle" onclick="toggleProductsRankingExpanded()">展开全部</button>
+              </div>
+            </div>
+            <div id="products-list" class="products-list-wrap">
+              <div class="sales-empty-state" style="padding:24px;text-align:center">同步数据后显示</div>
+            </div>
+          </div>
+
+          <div class="chart-card">
+            <div class="chart-card-header">
+              <div>
+                <div class="chart-card-title">AI经营洞察</div>
+                <div class="chart-card-sub">帮助老板快速看清冠军、增长、下滑和经营动作</div>
+              </div>
+            </div>
+            <div id="products-insights" class="products-insights-wrap">
+              <div class="sales-empty-state" style="padding:20px">暂无分析数据</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="products-analysis-grid">
+          <div class="chart-card">
+            <div class="chart-card-header">
+              <div>
+                <div class="chart-card-title">菜单盈利能力分析</div>
+                <div class="chart-card-sub">识别明星产品、引流产品、潜力产品和问题产品</div>
+              </div>
+            </div>
+            <div id="products-menu-engineering" class="products-engineering-grid">
+              <div class="sales-empty-state" style="padding:20px">暂无菜单工程分析</div>
+            </div>
+          </div>
+
+          <div class="chart-card">
+            <div class="chart-card-header">
+              <div>
+                <div class="chart-card-title">销售集中度分析</div>
+                <div class="chart-card-sub">查看爆款集中情况与经营风险</div>
+              </div>
+            </div>
+            <div class="products-concentration-wrap">
+              <div class="products-mini-chart">
+                <canvas id="products-concentration-chart"></canvas>
+              </div>
+              <div id="products-concentration-copy" class="products-insights-wrap">
+                <div class="sales-empty-state" style="padding:12px">暂无集中度数据</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="products-analysis-grid">
+          <div class="chart-card">
+            <div class="chart-card-header">
+              <div>
+                <div class="chart-card-title">热门菜品趋势</div>
+                <div class="chart-card-sub" id="products-trend-sub">展示 TOP5 菜品的变化趋势</div>
+              </div>
+              <div class="products-toolbar">
+                <div class="products-mode-switch">
+                  <button class="ctype-btn active" id="products-trend-7d" onclick="setProductsTrendRange('7d')">近7天</button>
+                  <button class="ctype-btn" id="products-trend-30d" onclick="setProductsTrendRange('30d')">近30天</button>
+                </div>
+                <div class="products-mode-switch">
+                  <button class="ctype-btn active" id="products-trend-metric-qty" onclick="setProductsTrendMetric('qty')">销量趋势</button>
+                  <button class="ctype-btn" id="products-trend-metric-revenue" onclick="setProductsTrendMetric('revenue')">销售额趋势</button>
+                  <button class="ctype-btn" id="products-trend-metric-profit" onclick="setProductsTrendMetric('profit')">利润趋势</button>
+                </div>
+              </div>
+            </div>
+            <div class="products-trend-chart-wrap">
+              <canvas id="products-trend-chart"></canvas>
+            </div>
+          </div>
+
+          <div class="chart-card">
+            <div class="chart-card-header">
+              <div>
+                <div class="chart-card-title">品类分析</div>
+                <div class="chart-card-sub">按面食、小吃、饮品等品类看贡献结构</div>
+              </div>
+            </div>
+            <div id="products-category-analysis" class="products-category-list">
+              <div class="sales-empty-state" style="padding:20px">暂无品类分析</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="chart-card">
+          <div class="chart-card-header">
+            <div>
+              <div class="chart-card-title">今日利润贡献 TOP5</div>
+              <div class="chart-card-sub">老板最关心的高利润单品表现</div>
+            </div>
+          </div>
+          <div id="products-profit-board" class="products-profit-board">
+            <div class="sales-empty-state" style="padding:20px">暂无利润榜</div>
+          </div>
+        </div>
+      </section>
     </main>
 
     <!-- ===== STATUS BAR ===== -->

@@ -8,8 +8,8 @@
  */
 'use strict';
 
-const puppeteer = require('puppeteer');
 const fs        = require('fs');
+const { launchBrowser } = require('./browser');
 
 function loadLocalEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return;
@@ -53,6 +53,17 @@ const DETAIL_SAVE_EVERY = Math.max(1, Number(process.env.TAPTOUCH_DETAIL_SAVE_EV
 const DETAIL_PRIME_COUNT = Math.max(0, Number(process.env.TAPTOUCH_DETAIL_PRIME_COUNT || 8));
 const SCRAPE_RESULT_PATH = 'scrape-result.json';
 const PREFETCH_DETAILS = /^(1|true|yes)$/i.test(process.env.TAPTOUCH_PREFETCH_DETAILS || '');
+
+function hasConfiguredTapTouchCredentials() {
+  const email = String(CREDS.email || '').trim();
+  const password = String(CREDS.password || '').trim();
+
+  if (!email || !password) return false;
+  if (email === 'your-email@example.com') return false;
+  if (password === 'your-password') return false;
+
+  return true;
+}
 
 function decodeHtmlEntities(value) {
   return String(value || '')
@@ -149,35 +160,60 @@ function parseProductsFromHtml(html) {
   const products = [];
 
   for (const rowHtml of rowMatches) {
-    const cells = (rowHtml.match(/<td[\s\S]*?<\/td>/gi) || [])
-      .map(cell => decodeHtmlEntities(
-        cell
-          .replace(/<br\s*\/?>/gi, ' ')
-          .replace(/<[^>]+>/g, ' ')
-          .replace(/\s+/g, ' ')
-          .trim()
-      ));
+    const cellMatches = rowHtml.match(/<td[\s\S]*?<\/td>/gi) || [];
+    const cells = cellMatches.map(cell => decodeHtmlEntities(
+      cell
+        .replace(/<br\s*\/?>/gi, ' ')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+    ));
 
-    if (cells.length < 3 || !cells[0] || isNaN(parseInt(cells[0]))) continue;
+    if (cells.length < 8) continue;
 
     const name = cells[1] || '';
-    const qtyStr = cells[cells.length - 2] || '0';
-    const amountStr = cells[cells.length - 1] || '$0';
+    const code = cells[2] || '';
+    const category = cells[3] || '未分类';
+    const onlineQtyStr = cells[4] || '0';
+    const onlineAmountStr = cells[5] || '$0';
+    const qtyStr = cells[6] || '0';
+    const amountStr = cells[7] || '$0';
+    const shareStr = cells[8] || '0%';
+    const costStr = cells[9] || '$0';
+    const profitStr = cells[10] || '$0';
 
-    const qty = parseInt(qtyStr.replace(/,/g, '')) || 0;
+    const onlineQty = parseInt(onlineQtyStr.replace(/,/g, ''), 10) || 0;
+    const onlineAmount = parseFloat(onlineAmountStr.replace(/[$,]/g, '')) || 0.0;
+    const qty = parseInt(qtyStr.replace(/,/g, ''), 10) || 0;
     const amount = parseFloat(amountStr.replace(/[$,]/g, '')) || 0.0;
+    const sharePct = parseFloat(String(shareStr).replace(/[^0-9.-]/g, '')) || 0.0;
+    const cost = parseFloat(costStr.replace(/[$,]/g, '')) || 0.0;
+    const profit = parseFloat(profitStr.replace(/[$,]/g, '')) || amount;
 
-    if (!name || name.toLowerCase().includes('total') || name.toLowerCase().includes('summary')) continue;
+    if (!name || qty <= 0) continue;
+    if (name.toLowerCase().includes('total') || name.toLowerCase().includes('summary')) continue;
 
     products.push({
-      rank: parseInt(cells[0]) || (products.length + 1),
+      rank: products.length + 1,
       name,
+      code,
+      category,
+      onlineQty,
+      onlineAmount,
       qty,
       amount,
+      sharePct,
+      cost,
+      profit,
     });
   }
 
-  return products.sort((a, b) => b.qty - a.qty);
+  return products
+    .sort((a, b) => (b.qty - a.qty) || (b.amount - a.amount))
+    .map((product, index) => ({
+      ...product,
+      rank: index + 1,
+    }));
 }
 
 function buildPagedReportUrl(url, pageNum, perPage = ORDER_PAGE_SIZE) {
@@ -563,10 +599,7 @@ async function collectOrdersListFromFetcher(fetchHtml, url, scopeLabel) {
 }
 
 async function createSessionByLogin(options = {}) {
-  const browser = await puppeteer.launch({
-    headless: 'new',
-    args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu'],
-  });
+  const browser = await launchBrowser();
 
   try {
     const page = await createWorkerPage(browser);
@@ -697,6 +730,22 @@ async function fetchCoreDataWithSession(session, options = {}) {
   };
 }
 
+async function fetchProductsForRangeWithSession(session, options = {}) {
+  const sid = session?.sid || options.sid || null;
+  const response = await fetchHtmlWithCookie(session, buildProductReportUrl({
+    sid,
+    label: options.label || null,
+    start: options.start || null,
+    end: options.end || null,
+  }));
+
+  return {
+    fetchedAt: new Date().toISOString(),
+    sid,
+    products: parseProductsFromHtml(response.html),
+  };
+}
+
 async function fetchOrdersForDateWithSession(session, dateKey, options = {}) {
   const { start, end } = buildDayRange(dateKey);
   const sid = session?.sid || options.sid || null;
@@ -736,6 +785,37 @@ async function fetchSingleOrderDetailWithSession(session, order, options = {}) {
   }
 
   return null;
+}
+
+async function fetchProductsForRange(options = {}) {
+  const browser = await launchBrowser();
+
+  try {
+    const page = await createWorkerPage(browser);
+    await loginToTapTouch(page);
+    const sid = await ensureStoreContext(page, options.sid || null);
+
+    const productUrl = buildProductReportUrl({
+      sid,
+      label: options.label || null,
+      start: options.start || null,
+      end: options.end || null,
+    });
+
+    await page.goto(productUrl, { waitUntil: 'networkidle2', timeout: 45000 });
+    await wait(1200);
+
+    const html = await page.content();
+    await page.close();
+
+    return {
+      fetchedAt: new Date().toISOString(),
+      sid,
+      products: parseProductsFromHtml(html),
+    };
+  } finally {
+    await browser.close();
+  }
 }
 
 function loadExistingResult() {
@@ -816,8 +896,8 @@ async function createWorkerPage(browser) {
 }
 
 async function loginToTapTouch(page) {
-  if (!CREDS.email || !CREDS.password) {
-    throw new Error('Missing TapTouch credentials. Set TAPTOUCH_EMAIL and TAPTOUCH_PASSWORD in .env.local or your shell environment.');
+  if (!hasConfiguredTapTouchCredentials()) {
+    throw new Error('Missing TapTouch credentials. Set real TAPTOUCH_EMAIL and TAPTOUCH_PASSWORD values in .env.local or your shell environment.');
   }
 
   console.log('[Scraper] Logging in...');
@@ -990,10 +1070,7 @@ async function primeRecentOrderDetails(browser, orders, seededOrderDetails, opti
 }
 
 async function fetchSingleOrderDetail(order, options = {}) {
-  const browser = await puppeteer.launch({
-    headless: 'new',
-    args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu'],
-  });
+  const browser = await launchBrowser();
 
   try {
     const page = await createWorkerPage(browser);
@@ -1014,10 +1091,7 @@ async function fetchSingleOrderDetail(order, options = {}) {
 }
 
 async function fetchOrdersForDate(dateKey, options = {}) {
-  const browser = await puppeteer.launch({
-    headless: 'new',
-    args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu'],
-  });
+  const browser = await launchBrowser();
 
   try {
     const page = await createWorkerPage(browser);
@@ -1045,10 +1119,7 @@ async function fetchOrdersForDate(dateKey, options = {}) {
 // ─────────────────────────────────────────────────────────────
 async function scrapeTapTouch() {
   console.log('[Scraper] Launching browser...');
-  const browser = await puppeteer.launch({
-    headless: 'new',
-    args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu'],
-  });
+  const browser = await launchBrowser();
   const page = await browser.newPage();
   await page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120 Safari/537.36');
   await page.setViewport({ width: 1440, height: 900 });
@@ -1283,8 +1354,10 @@ async function scrapeTapTouch() {
 module.exports = {
   createSessionByLogin,
   fetchCoreDataWithSession,
+  fetchProductsForRangeWithSession,
   fetchOrdersForDateWithSession,
   fetchSingleOrderDetailWithSession,
+  fetchProductsForRange,
   fetchOrdersForDate,
   scrapeTapTouch,
   fetchSingleOrderDetail,
