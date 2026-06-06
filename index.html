@@ -5,11 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>餐厅运营中心 | Melbourne Restaurant Dashboard</title>
   <meta name="description" content="墨尔本餐厅实时运营仪表板 — 销售数据、摄像头监控一站式查看" />
+  <script src="view-switch.js"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="style.css?v=20260603" />
 </head>
 <body>
 
@@ -56,6 +57,14 @@
       <a class="nav-item" href="#" id="nav-products" onclick="showPage('products')">
         <svg class="nav-icon" viewBox="0 0 20 20" fill="none"><path d="M3 5H17M3 10H17M3 15H17" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
         <span>热销菜品</span>
+      </a>
+      <a class="nav-item" href="#" id="nav-context" onclick="showPage('context')">
+        <svg class="nav-icon" viewBox="0 0 20 20" fill="none"><path d="M4 5.5C4 4.67 4.67 4 5.5 4H14.5C15.33 4 16 4.67 16 5.5V14.5C16 15.33 15.33 16 14.5 16H5.5C4.67 16 4 15.33 4 14.5V5.5Z" stroke="currentColor" stroke-width="1.5"/><path d="M7 8H13M7 11H13M7 14H10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        <span>数据语义</span>
+      </a>
+      <a class="nav-item" href="#" id="nav-reports" onclick="showPage('reports')">
+        <svg class="nav-icon" viewBox="0 0 20 20" fill="none"><path d="M5 3.5H15C15.83 3.5 16.5 4.17 16.5 5V15C16.5 15.83 15.83 16.5 15 16.5H5C4.17 16.5 3.5 15.83 3.5 15V5C3.5 4.17 4.17 3.5 5 3.5Z" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 7.5H13.5M6.5 10.5H13.5M6.5 13.5H10.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        <span>每日日报</span>
       </a>
 
       <div class="nav-divider"></div>
@@ -661,6 +670,224 @@
       </section>
     </main>
 
+    <!-- ===== PAGE: DAILY REPORTS ===== -->
+    <main class="page-content hidden" id="page-reports">
+      <section class="reports-page-shell">
+        <div class="chart-card report-agent-hero">
+          <div class="report-agent-hero-top">
+            <div>
+              <div class="chart-card-title">营业日报 Agent</div>
+              <div class="chart-card-sub" id="daily-report-hero-sub">每天自动分析营业额、订单数、客单价、热销菜品和异常点</div>
+            </div>
+            <div class="report-agent-actions">
+              <a class="report-agent-link-btn" id="daily-report-open-link" href="#" target="_blank" rel="noreferrer">打开完整报告</a>
+              <button class="report-agent-generate-btn" id="daily-report-generate-btn" onclick="generateDailyReport()">立即生成今日日报</button>
+            </div>
+          </div>
+          <div class="report-agent-status-row">
+            <div class="report-agent-status-card">
+              <div class="report-agent-status-label">状态</div>
+              <div class="report-agent-status-value" id="daily-report-status">正在读取</div>
+              <div class="report-agent-status-sub" id="daily-report-status-sub">等待最新日报</div>
+            </div>
+            <div class="report-agent-status-card">
+              <div class="report-agent-status-label">报告日期</div>
+              <div class="report-agent-status-value" id="daily-report-date">--</div>
+              <div class="report-agent-status-sub" id="daily-report-generated-at">尚未生成</div>
+            </div>
+            <div class="report-agent-status-card">
+              <div class="report-agent-status-label">Agent 模式</div>
+              <div class="report-agent-status-value" id="daily-report-agent-mode">--</div>
+              <div class="report-agent-status-sub" id="daily-report-html-path">等待输出</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="report-agent-summary-grid" id="daily-report-summary-grid">
+          <div class="report-agent-summary-card">
+            <div class="report-agent-summary-label">今日营业额</div>
+            <div class="report-agent-summary-value">加载中</div>
+            <div class="report-agent-summary-sub">等待日报数据</div>
+          </div>
+        </div>
+
+        <div class="report-agent-grid">
+          <div class="chart-card">
+            <div class="chart-card-header">
+              <div>
+                <div class="chart-card-title">老板先看</div>
+                <div class="chart-card-sub">日报会先讲今天发生了什么，再讲为什么</div>
+              </div>
+            </div>
+            <div class="report-agent-list" id="daily-report-executive">
+              <div class="sales-empty-state" style="padding:20px">正在读取日报摘要</div>
+            </div>
+          </div>
+
+          <div class="chart-card">
+            <div class="chart-card-header">
+              <div>
+                <div class="chart-card-title">今晚要盯什么</div>
+                <div class="chart-card-sub">用来指导今晚和明天的经营动作</div>
+              </div>
+            </div>
+            <div class="report-agent-list" id="daily-report-recommendations">
+              <div class="sales-empty-state" style="padding:20px">正在读取经营建议</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="report-agent-grid report-agent-grid--secondary">
+          <div class="chart-card">
+            <div class="chart-card-header">
+              <div>
+                <div class="chart-card-title">关键发现</div>
+                <div class="chart-card-sub">帮助你快速定位是流量问题、结构问题还是客单价问题</div>
+              </div>
+            </div>
+            <div class="report-agent-list" id="daily-report-findings">
+              <div class="sales-empty-state" style="padding:20px">正在读取关键发现</div>
+            </div>
+          </div>
+
+          <div class="chart-card">
+            <div class="chart-card-header">
+              <div>
+                <div class="chart-card-title">下一步问题</div>
+                <div class="chart-card-sub">如果你要继续深挖，下一轮最值得问的方向</div>
+              </div>
+            </div>
+            <div class="report-agent-list" id="daily-report-questions">
+              <div class="sales-empty-state" style="padding:20px">正在读取下一步问题</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="chart-card report-agent-preview-card">
+          <div class="chart-card-header">
+            <div>
+              <div class="chart-card-title">完整报告预览</div>
+              <div class="chart-card-sub">这是 agent 生成后写回网站的 HTML 报告，可直接转给老板查看</div>
+            </div>
+          </div>
+          <div class="report-agent-preview" id="daily-report-preview">
+            <div class="sales-empty-state" style="padding:28px">日报生成后会在这里预览</div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- ===== PAGE: DATA CONTEXT ===== -->
+    <main class="page-content hidden" id="page-context">
+      <section class="context-page-shell">
+        <div class="chart-card context-hero-card">
+          <div class="context-hero-top">
+            <div>
+              <div class="chart-card-title">Data Analytics 启动上下文</div>
+              <div class="chart-card-sub" id="context-runtime-note">把 TapTouch 仪表板的指标定义、数据来源和常见分析问题沉淀成可复用上下文</div>
+            </div>
+            <div class="context-hero-badge">Reusable Context</div>
+          </div>
+          <div class="context-stat-grid" id="context-summary-grid">
+            <div class="context-stat-card">
+              <div class="context-stat-label">覆盖级别</div>
+              <div class="context-stat-value">加载中</div>
+              <div class="context-stat-sub">正在读取上下文</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="context-section-grid">
+          <div class="chart-card">
+            <div class="chart-card-header">
+              <div>
+                <div class="chart-card-title">关键来源</div>
+                <div class="chart-card-sub">后续做数据分析时，优先从这些来源和路径开始</div>
+              </div>
+            </div>
+            <div class="context-source-grid" id="context-sources-grid">
+              <div class="sales-empty-state" style="padding:20px">正在读取来源信息</div>
+            </div>
+          </div>
+
+          <div class="chart-card">
+            <div class="chart-card-header">
+              <div>
+                <div class="chart-card-title">默认维度</div>
+                <div class="chart-card-sub">这几个字段是后续拆解销售表现时最常用的切片</div>
+              </div>
+            </div>
+            <div class="context-chip-list" id="context-dimensions">
+              <span class="context-chip">等待加载</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="chart-card">
+          <div class="chart-card-header">
+            <div>
+              <div class="chart-card-title">核心指标字典</div>
+              <div class="chart-card-sub">网站指标、API 和后续 @Data Analytics 分析共用这套定义</div>
+            </div>
+          </div>
+          <div class="context-table-wrap">
+            <table class="context-metric-table">
+              <thead>
+                <tr>
+                  <th>指标</th>
+                  <th>定义</th>
+                  <th>粒度</th>
+                  <th>权威来源</th>
+                  <th>注意点</th>
+                </tr>
+              </thead>
+              <tbody id="context-metrics-body">
+                <tr><td colspan="5" style="text-align:center;color:var(--text-3);padding:24px">正在读取指标定义</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="context-section-grid context-section-grid--triple">
+          <div class="chart-card">
+            <div class="chart-card-header">
+              <div>
+                <div class="chart-card-title">常见分析路径</div>
+                <div class="chart-card-sub">遇到不同问题时，应该优先看哪些接口</div>
+              </div>
+            </div>
+            <div class="context-stack-list" id="context-patterns">
+              <div class="sales-empty-state" style="padding:20px">正在读取分析路径</div>
+            </div>
+          </div>
+
+          <div class="chart-card">
+            <div class="chart-card-header">
+              <div>
+                <div class="chart-card-title">已知注意点</div>
+                <div class="chart-card-sub">避免把缓存差异或懒加载细节误判成业务波动</div>
+              </div>
+            </div>
+            <div class="context-stack-list" id="context-gotchas">
+              <div class="sales-empty-state" style="padding:20px">正在读取 caveats</div>
+            </div>
+          </div>
+
+          <div class="chart-card">
+            <div class="chart-card-header">
+              <div>
+                <div class="chart-card-title">下次可以直接问</div>
+                <div class="chart-card-sub">这些 prompt 已经对齐当前店铺和站点结构</div>
+              </div>
+            </div>
+            <div class="context-prompt-list" id="context-prompts">
+              <div class="sales-empty-state" style="padding:20px">正在读取推荐 prompt</div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
     <!-- ===== STATUS BAR ===== -->
     <footer class="status-footer">
       <span id="footer-data-source">数据来源: TapTouch (模拟模式)</span>
@@ -696,6 +923,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=20260531"></script>
+  <script src="app.js?v=20260603"></script>
 </body>
 </html>

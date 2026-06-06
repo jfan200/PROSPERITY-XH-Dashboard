@@ -2301,6 +2301,11 @@ let productsTrendChartInst = null;
 let productsConcentrationChartInst = null;
 let productsRankingExpanded = false;
 let productsReportLoading = false;
+let cachedDataContext = null;
+let dataContextLoading = false;
+let cachedDailyReport = null;
+let dailyReportLoading = false;
+let dailyReportGenerating = false;
 
 function medalForRank(rank) {
   if (rank === 1) return '🥇';
@@ -2960,6 +2965,361 @@ function renderProductsPage(analysis) {
   renderProductsProfitBoard(analysis);
 }
 
+function renderDataContextPage(payload) {
+  const summaryGrid = document.getElementById('context-summary-grid');
+  const runtimeNote = document.getElementById('context-runtime-note');
+  const sourcesGrid = document.getElementById('context-sources-grid');
+  const dimensions = document.getElementById('context-dimensions');
+  const metricsBody = document.getElementById('context-metrics-body');
+  const patterns = document.getElementById('context-patterns');
+  const gotchas = document.getElementById('context-gotchas');
+  const prompts = document.getElementById('context-prompts');
+
+  if (!summaryGrid || !runtimeNote || !sourcesGrid || !dimensions || !metricsBody || !patterns || !gotchas || !prompts) return;
+
+  if (!payload) {
+    runtimeNote.textContent = '把 TapTouch 仪表板的指标定义、数据来源和常见分析问题沉淀成可复用上下文';
+    summaryGrid.innerHTML = `
+      <div class="context-stat-card">
+        <div class="context-stat-label">覆盖级别</div>
+        <div class="context-stat-value">等待加载</div>
+        <div class="context-stat-sub">正在读取语义层</div>
+      </div>
+      <div class="context-stat-card">
+        <div class="context-stat-label">运行状态</div>
+        <div class="context-stat-value">--</div>
+        <div class="context-stat-sub">需要服务在线</div>
+      </div>
+      <div class="context-stat-card">
+        <div class="context-stat-label">建议用途</div>
+        <div class="context-stat-value">--</div>
+        <div class="context-stat-sub">后续分析启动点</div>
+      </div>
+      <div class="context-stat-card">
+        <div class="context-stat-label">默认时区</div>
+        <div class="context-stat-value">--</div>
+        <div class="context-stat-sub">等待加载</div>
+      </div>
+    `;
+    sourcesGrid.innerHTML = '<div class="sales-empty-state" style="padding:20px">正在读取来源信息</div>';
+    dimensions.innerHTML = '<span class="context-chip">等待加载</span>';
+    metricsBody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-3);padding:24px">正在读取指标定义</td></tr>';
+    patterns.innerHTML = '<div class="sales-empty-state" style="padding:20px">正在读取分析路径</div>';
+    gotchas.innerHTML = '<div class="sales-empty-state" style="padding:20px">正在读取 caveats</div>';
+    prompts.innerHTML = '<div class="sales-empty-state" style="padding:20px">正在读取推荐 prompt</div>';
+    return;
+  }
+
+  const runtime = payload.runtime || {};
+  const availableData = runtime.availableData || {};
+  const summaryCards = [
+    {
+      label: '覆盖级别',
+      value: payload.coverageLevel || 'Unknown',
+      sub: payload.area || '未命名数据域',
+    },
+    {
+      label: '运行状态',
+      value: runtime.hasLiveData ? 'Live' : 'Cache',
+      sub: runtime.hasLiveData
+        ? `最近同步 ${String(runtime.scrapedAt || runtime.lastUpdated || '')}`
+        : '当前以缓存或空数据为主',
+    },
+    {
+      label: '可用数据面',
+      value: `${availableData.products || 0} SKU`,
+      sub: `${availableData.recentOrders || 0} 笔今日订单 · ${availableData.historicalDateCaches || 0} 个历史日期缓存`,
+    },
+    {
+      label: '默认时区',
+      value: payload.timeZone || 'Australia/Melbourne',
+      sub: '日切、日期筛选和后续分析默认跟随门店本地时间',
+    },
+  ];
+
+  summaryGrid.innerHTML = summaryCards.map(card => `
+    <div class="context-stat-card">
+      <div class="context-stat-label">${escapeHtml(card.label)}</div>
+      <div class="context-stat-value">${escapeHtml(card.value)}</div>
+      <div class="context-stat-sub">${escapeHtml(card.sub)}</div>
+    </div>
+  `).join('');
+
+  runtimeNote.textContent = payload.freshnessExpectation || 'Data Analytics 会优先使用本页列出的指标定义和来源，然后再决定是否需要更深的外部数据源。';
+
+  const sourceInventory = Array.isArray(payload.sourceInventory) ? payload.sourceInventory : [];
+  sourcesGrid.innerHTML = sourceInventory.length
+    ? sourceInventory.map(item => `
+      <div class="context-source-card">
+        <div class="context-source-type">${escapeHtml(item.type || 'source')}</div>
+        <div class="context-source-name">${escapeHtml(item.name || 'Unnamed source')}</div>
+        <div class="context-source-copy">${escapeHtml(item.useFor || '')}</div>
+        <div class="context-source-meta">${escapeHtml(item.status || '')}</div>
+        <div class="context-source-path">${escapeHtml(item.locator || '')}</div>
+      </div>
+    `).join('')
+    : '<div class="sales-empty-state" style="padding:20px">暂无来源信息</div>';
+
+  const dimensionList = Array.isArray(payload.dimensions) ? payload.dimensions : [];
+  dimensions.innerHTML = dimensionList.length
+    ? dimensionList.map(item => `<span class="context-chip">${escapeHtml(item)}</span>`).join('')
+    : '<span class="context-chip">暂无默认维度</span>';
+
+  const metrics = Array.isArray(payload.keyMetrics) ? payload.keyMetrics : [];
+  metricsBody.innerHTML = metrics.length
+    ? metrics.map(metric => `
+      <tr>
+        <td>${escapeHtml(metric.name || '')}</td>
+        <td>${escapeHtml(metric.definition || '')}</td>
+        <td>${escapeHtml(metric.grain || '')}</td>
+        <td>${escapeHtml(metric.canonicalSource || '')}</td>
+        <td>${escapeHtml(metric.caveats || '')}</td>
+      </tr>
+    `).join('')
+    : '<tr><td colspan="5" style="text-align:center;color:var(--text-3);padding:24px">暂无指标定义</td></tr>';
+
+  const patternList = Array.isArray(payload.queryPatterns) ? payload.queryPatterns : [];
+  patterns.innerHTML = patternList.length
+    ? patternList.map(item => `
+      <div class="context-stack-card">
+        <div class="context-stack-title">${escapeHtml(item.name || '')}</div>
+        <div class="context-stack-copy">${escapeHtml(item.useWhen || '')}</div>
+        <div class="context-route-list">${(Array.isArray(item.apiRoutes) ? item.apiRoutes : []).map(route => `<span class="context-route-pill">${escapeHtml(route)}</span>`).join('')}</div>
+      </div>
+    `).join('')
+    : '<div class="sales-empty-state" style="padding:20px">暂无分析路径</div>';
+
+  const gotchaList = Array.isArray(payload.gotchas) ? payload.gotchas : [];
+  gotchas.innerHTML = gotchaList.length
+    ? gotchaList.map(item => `<div class="context-bullet-card">${escapeHtml(item)}</div>`).join('')
+    : '<div class="sales-empty-state" style="padding:20px">暂无 caveats</div>';
+
+  const promptList = Array.isArray(payload.futurePrompts) ? payload.futurePrompts : [];
+  prompts.innerHTML = promptList.length
+    ? promptList.map(item => `<div class="context-prompt-card">${escapeHtml(item)}</div>`).join('')
+    : '<div class="sales-empty-state" style="padding:20px">暂无推荐 prompt</div>';
+}
+
+async function loadDataContext(force = false) {
+  if (dataContextLoading) return;
+  if (cachedDataContext && !force) {
+    renderDataContextPage(cachedDataContext);
+    return;
+  }
+
+  dataContextLoading = true;
+  renderDataContextPage(cachedDataContext);
+
+  try {
+    const response = await fetch(`${CONFIG.apiBase}/api/data-context`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const payload = await response.json();
+    cachedDataContext = payload;
+    renderDataContextPage(payload);
+  } catch (error) {
+    console.error('[App] loadDataContext failed:', error.message);
+    renderDataContextPage(cachedDataContext);
+  } finally {
+    dataContextLoading = false;
+  }
+}
+
+function renderReportAgentList(items = [], emptyText = '暂无内容') {
+  const normalized = Array.isArray(items) ? items.filter(Boolean) : [];
+  if (!normalized.length) {
+    return `<div class="sales-empty-state" style="padding:20px">${escapeHtml(emptyText)}</div>`;
+  }
+
+  return normalized.map(item => `
+    <div class="report-agent-list-card">
+      <div class="report-agent-list-copy">${escapeHtml(item)}</div>
+    </div>
+  `).join('');
+}
+
+function renderDailyReportPage(payload) {
+  const summaryGrid = document.getElementById('daily-report-summary-grid');
+  const executive = document.getElementById('daily-report-executive');
+  const recommendations = document.getElementById('daily-report-recommendations');
+  const findings = document.getElementById('daily-report-findings');
+  const questions = document.getElementById('daily-report-questions');
+  const preview = document.getElementById('daily-report-preview');
+  const openLink = document.getElementById('daily-report-open-link');
+
+  const report = payload?.report || null;
+  const meta = payload?.meta || null;
+  const state = payload?.state || null;
+  const statusEl = document.getElementById('daily-report-status');
+  const statusSubEl = document.getElementById('daily-report-status-sub');
+  const dateEl = document.getElementById('daily-report-date');
+  const generatedAtEl = document.getElementById('daily-report-generated-at');
+  const modeEl = document.getElementById('daily-report-agent-mode');
+  const htmlPathEl = document.getElementById('daily-report-html-path');
+  const heroSubEl = document.getElementById('daily-report-hero-sub');
+
+  if (!report) {
+    if (statusEl) statusEl.textContent = dailyReportGenerating ? '生成中' : (dailyReportLoading ? '加载中' : '尚未生成');
+    if (statusSubEl) statusSubEl.textContent = state?.lastError || '生成后会自动显示今天的营业摘要和完整 HTML 报告。';
+    if (dateEl) dateEl.textContent = '--';
+    if (generatedAtEl) generatedAtEl.textContent = '尚未生成';
+    if (modeEl) modeEl.textContent = state?.agentMode || '--';
+    if (htmlPathEl) htmlPathEl.textContent = '等待输出';
+    if (heroSubEl) heroSubEl.textContent = '每天自动分析营业额、订单数、客单价、热销菜品和异常点';
+    if (summaryGrid) {
+      summaryGrid.innerHTML = `
+        <div class="report-agent-summary-card">
+          <div class="report-agent-summary-label">今日营业额</div>
+          <div class="report-agent-summary-value">${dailyReportGenerating ? '生成中...' : '等待数据'}</div>
+          <div class="report-agent-summary-sub">${escapeHtml(state?.lastError || '日报生成后这里会显示今天和昨天的核心对比')}</div>
+        </div>
+      `;
+    }
+    if (executive) executive.innerHTML = renderReportAgentList([], '日报生成后会出现老板先看摘要');
+    if (recommendations) recommendations.innerHTML = renderReportAgentList([], '日报生成后会出现经营建议');
+    if (findings) findings.innerHTML = renderReportAgentList([], '日报生成后会出现关键发现');
+    if (questions) questions.innerHTML = renderReportAgentList([], '日报生成后会出现下一步问题');
+    if (preview) preview.innerHTML = `<div class="sales-empty-state" style="padding:28px">${dailyReportGenerating ? '日报生成中，请稍候...' : '日报生成后会在这里预览'}</div>`;
+    if (openLink) {
+      openLink.href = '#';
+      openLink.classList.add('disabled');
+      openLink.setAttribute('aria-disabled', 'true');
+    }
+    return;
+  }
+
+  const fullDayRevenuePct = Number(report?.comparison?.fullDay?.revenue?.pct || 0);
+  const sameTimeRevenueDelta = Number(report?.comparison?.sameTime?.revenue?.delta || 0);
+  const sameTimeAvgDelta = Number(report?.comparison?.sameTime?.avgTicket?.delta || 0);
+  const topProduct = report?.products?.topRevenue?.[0] || null;
+
+  if (statusEl) statusEl.textContent = dailyReportGenerating ? '更新中' : '已生成';
+  if (statusSubEl) statusSubEl.textContent = state?.lastError || '数据更新后服务端会自动重算最新日报。';
+  if (dateEl) dateEl.textContent = report.dateKey || '--';
+  if (generatedAtEl) generatedAtEl.textContent = report.generatedAt ? `生成于 ${report.generatedAt.replace('T', ' ').slice(0, 16)}` : '生成时间未知';
+  if (modeEl) modeEl.textContent = report?.agent?.mode || meta?.agentMode || '--';
+  if (htmlPathEl) htmlPathEl.textContent = meta?.htmlPath || 'HTML 路径不可用';
+  if (heroSubEl) heroSubEl.textContent = `截至 ${report?.comparison?.sameTime?.cutoffTime || '--:--'} 的同时间对比、周内表现和菜品贡献都会自动整理进日报。`;
+
+  if (summaryGrid) {
+    summaryGrid.innerHTML = [
+      {
+        label: '今日营业额',
+        value: formatCurrency(report?.today?.totalRevenue || 0),
+        sub: `昨天全天 ${formatCurrency(report?.yesterday?.totalRevenue || 0)} · 全天口径 ${fullDayRevenuePct >= 0 ? '+' : ''}${fullDayRevenuePct.toFixed(1)}%`,
+      },
+      {
+        label: '今日订单数',
+        value: `${report?.today?.totalOrders || 0} 单`,
+        sub: `同时间较昨天 ${sameTimeRevenueDelta >= 0 ? '多' : '少'} ${Math.abs(report?.comparison?.sameTime?.orders?.delta || 0)} 单`,
+      },
+      {
+        label: '平均客单价',
+        value: formatCurrency(report?.today?.avgTicket || 0),
+        sub: `同时间较昨天 ${sameTimeAvgDelta >= 0 ? '+' : ''}${sameTimeAvgDelta.toFixed(2)}`,
+      },
+      {
+        label: '头部菜品',
+        value: topProduct?.name || '--',
+        sub: topProduct ? `${formatCurrency(topProduct.amount || 0)} · ${topProduct.qty || 0} 份` : '等待菜品贡献数据',
+      },
+    ].map(card => `
+      <div class="report-agent-summary-card">
+        <div class="report-agent-summary-label">${escapeHtml(card.label)}</div>
+        <div class="report-agent-summary-value">${escapeHtml(card.value)}</div>
+        <div class="report-agent-summary-sub">${escapeHtml(card.sub)}</div>
+      </div>
+    `).join('');
+  }
+
+  if (executive) executive.innerHTML = renderReportAgentList(report?.sections?.executiveSummary, '暂无老板先看摘要');
+  if (recommendations) recommendations.innerHTML = renderReportAgentList(report?.sections?.recommendations, '暂无经营建议');
+  if (findings) findings.innerHTML = renderReportAgentList(report?.sections?.keyFindings, '暂无关键发现');
+  if (questions) questions.innerHTML = renderReportAgentList(report?.sections?.furtherQuestions, '暂无下一步问题');
+  if (preview) {
+    preview.innerHTML = meta?.htmlPath
+      ? `<iframe src="${meta.htmlPath}" title="每日日报预览" loading="lazy"></iframe>`
+      : '<div class="sales-empty-state" style="padding:28px">报告 HTML 路径不可用</div>';
+  }
+  if (openLink) {
+    openLink.href = meta?.htmlPath || '#';
+    openLink.classList.toggle('disabled', !meta?.htmlPath);
+    openLink.setAttribute('aria-disabled', meta?.htmlPath ? 'false' : 'true');
+  }
+}
+
+async function loadDailyReport(force = false) {
+  if (dailyReportLoading) return;
+  if (cachedDailyReport && !force) {
+    renderDailyReportPage(cachedDailyReport);
+    return;
+  }
+
+  dailyReportLoading = true;
+  renderDailyReportPage(cachedDailyReport);
+
+  try {
+    const response = await fetch(`${CONFIG.apiBase}/api/reports/daily/latest`);
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload.ok === false) {
+      throw new Error(payload.error || `HTTP ${response.status}`);
+    }
+    cachedDailyReport = payload;
+    renderDailyReportPage(payload);
+  } catch (error) {
+    console.error('[App] loadDailyReport failed:', error.message);
+    renderDailyReportPage(cachedDailyReport ? {
+      ...cachedDailyReport,
+      state: {
+        ...(cachedDailyReport.state || {}),
+        lastError: error.message,
+      },
+    } : { state: { lastError: error.message } });
+  } finally {
+    dailyReportLoading = false;
+  }
+}
+
+async function generateDailyReport() {
+  if (dailyReportGenerating) return;
+  dailyReportGenerating = true;
+  renderDailyReportPage(cachedDailyReport);
+
+  const button = document.getElementById('daily-report-generate-btn');
+  if (button) {
+    button.disabled = true;
+    button.textContent = '生成中...';
+  }
+
+  try {
+    const response = await fetch(`${CONFIG.apiBase}/api/reports/daily/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload.ok === false) {
+      throw new Error(payload.error || `HTTP ${response.status}`);
+    }
+    cachedDailyReport = payload;
+    renderDailyReportPage(payload);
+  } catch (error) {
+    console.error('[App] generateDailyReport failed:', error.message);
+    renderDailyReportPage(cachedDailyReport ? {
+      ...cachedDailyReport,
+      state: {
+        ...(cachedDailyReport.state || {}),
+        lastError: error.message,
+      },
+    } : { state: { lastError: error.message } });
+  } finally {
+    dailyReportGenerating = false;
+    if (button) {
+      button.disabled = false;
+      button.textContent = '立即生成今日日报';
+    }
+  }
+}
+
 async function loadProductsReport(options = {}) {
   const mode = options.mode || productsViewMode || 'today';
   const dateKey = options.dateKey || productsViewDate || getMelbourneDateString();
@@ -3231,7 +3591,7 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') closeCamModa
 // ============================================================
 function showPage(page) {
   currentPage = page;
-  ['dashboard','cameras','sales','orders','products'].forEach(p => {
+  ['dashboard','cameras','sales','orders','products','context','reports'].forEach(p => {
     const panel = document.getElementById(`page-${p}`);
     if (!panel) return;
     const isActive = p === page;
@@ -3249,6 +3609,8 @@ function showPage(page) {
     sales:     ['营销报表', `${salesModeLabel} · 今日 ${cachedSummary ? '$'+cachedSummary.totalRevenue : '--'} | ${cachedSummary?.totalOrders || '--'} 单 · ${refreshLabel}`],
     orders:    ['订单记录', `共 ${allOrdersCache.length} 笔 — 点击查看详情 · ${refreshLabel}`],
     products:  ['热销菜品', `商品排行分析 · ${refreshLabel}`],
+    context:   ['数据语义', 'Data Analytics 可复用上下文 · 指标定义、来源与常见分析路径'],
+    reports:   ['每日日报', '营业报告 Agent · 自动生成老板可读的日结摘要与完整 HTML 报告'],
   };
   const [t, s] = titles[page] || ['', ''];
   setText('page-title', t);
@@ -3271,6 +3633,12 @@ function showPage(page) {
     updateProductsPageTitle();
     updateProductsControls();
     loadProductsReport({ mode: productsViewMode, dateKey: productsViewDate || getMelbourneDateString() });
+  }
+  if (page === 'context') {
+    loadDataContext();
+  }
+  if (page === 'reports') {
+    loadDailyReport();
   }
 
   const activePanel = document.getElementById(`page-${page}`);
@@ -3359,6 +3727,12 @@ async function refreshData() {
       loadProductsReport({ mode: 'today', dateKey: todayDateKey });
     } else if (currentPage === 'products') {
       updateProductsPageTitle();
+    }
+    if (currentPage === 'context' || cachedDataContext) {
+      loadDataContext(true);
+    }
+    if (currentPage === 'reports' || cachedDailyReport) {
+      loadDailyReport(true);
     }
 
     if (selectedOrdersDate === todayDateKey) {
@@ -3759,6 +4133,8 @@ async function init() {
 
   renderTopItems();
   renderProductsPage(null);
+  renderDataContextPage(null);
+  renderDailyReportPage(null);
   // Load real data immediately
   await refreshData();
   await autoSyncOnPageOpen();

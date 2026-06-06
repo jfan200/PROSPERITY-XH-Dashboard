@@ -8,6 +8,8 @@ const DEFAULT_ARGS = [
   '--disable-setuid-sandbox',
   '--disable-dev-shm-usage',
   '--disable-gpu',
+  '--no-first-run',
+  '--no-zygote',
 ];
 
 const MACOS_CHROME_PATHS = [
@@ -33,6 +35,10 @@ function commandExists(command) {
 }
 
 function findBrowserExecutable() {
+  if (process.env.CHROME_BIN) {
+    return process.env.CHROME_BIN;
+  }
+
   if (process.env.TAPTOUCH_BROWSER_EXECUTABLE) {
     return process.env.TAPTOUCH_BROWSER_EXECUTABLE;
   }
@@ -63,12 +69,16 @@ async function launchBrowser(options = {}) {
   }
 
   const puppeteer = require('puppeteer-core');
+  const extraArgs = String(process.env.TAPTOUCH_BROWSER_ARGS || '')
+    .split(/\s+/)
+    .map(arg => arg.trim())
+    .filter(Boolean);
+
   return puppeteer.launch({
     headless: 'new',
     executablePath,
-    args: DEFAULT_ARGS,
     ...options,
-    args: [...DEFAULT_ARGS, ...(options.args || [])],
+    args: [...DEFAULT_ARGS, ...extraArgs, ...(options.args || [])],
   });
 }
 

@@ -9,7 +9,13 @@
 'use strict';
 
 const fs        = require('fs');
+const path      = require('path');
 const { launchBrowser } = require('./browser');
+const {
+  SCRAPE_RESULT_PATH,
+  DEBUG_DIR,
+  ensureRuntimeDirectories,
+} = require('./runtime-config');
 
 function loadLocalEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return;
@@ -51,8 +57,9 @@ const ORDER_PAGE_SIZE = Math.max(25, Number(process.env.TAPTOUCH_ORDER_PAGE_SIZE
 const DETAIL_CONCURRENCY = Math.max(1, Number(process.env.TAPTOUCH_DETAIL_CONCURRENCY || 4));
 const DETAIL_SAVE_EVERY = Math.max(1, Number(process.env.TAPTOUCH_DETAIL_SAVE_EVERY || 10));
 const DETAIL_PRIME_COUNT = Math.max(0, Number(process.env.TAPTOUCH_DETAIL_PRIME_COUNT || 8));
-const SCRAPE_RESULT_PATH = 'scrape-result.json';
 const PREFETCH_DETAILS = /^(1|true|yes)$/i.test(process.env.TAPTOUCH_PREFETCH_DETAILS || '');
+
+ensureRuntimeDirectories();
 
 function hasConfiguredTapTouchCredentials() {
   const email = String(CREDS.email || '').trim();
@@ -309,12 +316,39 @@ function getOrderLookupKeys(order) {
 }
 
 function normalizeReceiptText(value) {
-  return String(value || '')
+  const normalized = String(value || '')
     .replace(/\r/g, '')
     .replace(/\u00a0/g, ' ')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n[ \t]+/g, '\n')
     .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+
+  const injected = normalized
+    .replace(/\s+(Customer:)/g, '\n$1')
+    .replace(/\s+(Fulfillment:)/g, '\n$1')
+    .replace(/\s+(Order Time:)/g, '\n$1')
+    .replace(/\s+(Transaction Id:)/g, '\n$1')
+    .replace(/\s+(Item Name(?:\s+Qty)?\s+Price\(\$\))/gi, '\n$1')
+    .replace(/\s+(Sub-Total\b)/g, '\n$1')
+    .replace(/\s+(GST Included In Total\b)/g, '\n$1')
+    .replace(/\s+(Surcharge\b)/g, '\n$1')
+    .replace(/\s+(Total Paid\b)/g, '\n$1')
+    .replace(/\s+(Reward Points:)/g, '\n$1')
+    .replace(/\s+(Flexible\b)/g, '\n$1')
+    .replace(/\s+(Cash\b)/g, '\n$1')
+    .replace(/\s+(Card\b)/g, '\n$1')
+    .replace(/\s+(Mastercard\b)/gi, '\n$1')
+    .replace(/\s+(Visa\b)/gi, '\n$1')
+    .replace(/\s+(EFTPOS\b)/gi, '\n$1')
+    .replace(/\s+\+\s+/g, '\n+ ');
+
+  const totalsExpanded = injected
+    .replace(/(Sub-Total\s+\$?[\d.]+)\s+(Total\s+\$?[\d.]+)/g, '$1\n$2');
+
+  return totalsExpanded
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{2,}/g, '\n')
     .trim();
 }
 
@@ -324,7 +358,7 @@ function formatMoney(value) {
 
 function extractReceiptMoney(text, label) {
   const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const match = text.match(new RegExp(`^\\s*${escapedLabel}\\s+\\$?([\\d.]+)\\s*$`, 'im'));
+  const match = text.match(new RegExp(`^\\s*${escapedLabel}\\s+\\$?([\\d.]+)(?:\\s|$)`, 'im'));
   return match ? parseFloat(match[1]) : 0;
 }
 
@@ -406,6 +440,20 @@ function parseReceiptItems(bodyText) {
   return items;
 }
 
+function parseReceiptItemsCompact(bodyText) {
+  const normalized = normalizeReceiptText(bodyText);
+  const headerMatch = normalized.match(/Item Name(?:\s+Qty)?\s+Price\(\$\)\s*([\s\S]*?)\nSub-Total\b/i);
+  if (!headerMatch) return [];
+
+  const section = headerMatch[1]
+    .replace(/(\d+\.\d{2})\s+(?=[^\+\n][^+\n]{2,}?\s+\d+\s+\d+\.\d{2}\b)/g, '$1\n')
+    .replace(/\n{2,}/g, '\n')
+    .trim();
+
+  if (!section) return [];
+  return parseReceiptItems(`Item Name Qty Price($)\n${section}\nSub-Total $0.00`);
+}
+
 function parseReceiptPaymentMethods(bodyText) {
   const normalized = normalizeReceiptText(bodyText);
   const lines = normalized.split('\n').map(line => line.trim()).filter(Boolean);
@@ -420,7 +468,13 @@ function parseReceiptPaymentMethods(bodyText) {
       if (!match) return null;
       const label = match[1].replace(/^\*\s*/, '').trim();
       const amount = parseFloat(match[2]) || 0;
-      if (!label || ignoredLabels.has(label) || /^Indicates Tax Free Items$/i.test(label)) {
+      if (
+        !label
+        || ignoredLabels.has(label)
+        || /^Indicates Tax Free Items$/i.test(label)
+        || /^Reward Points:/i.test(label)
+        || /^Credit Balance:/i.test(label)
+      ) {
         return null;
       }
       return { label, amount };
@@ -431,6 +485,7 @@ function parseReceiptPaymentMethods(bodyText) {
 function parseReceiptDetail(bodyText, order, url) {
   const normalized = normalizeReceiptText(bodyText);
   const items = parseReceiptItems(normalized);
+  const compactItems = items.length ? items : parseReceiptItemsCompact(normalized);
   const paymentMethods = parseReceiptPaymentMethods(normalized);
 
   const subtotal = extractReceiptMoney(normalized, 'Sub-Total');
@@ -459,7 +514,7 @@ function parseReceiptDetail(bodyText, order, url) {
       orderTime,
       transactionId,
     },
-    items,
+    items: compactItems,
     totals: {
       subtotal,
       total,
@@ -1127,6 +1182,7 @@ async function scrapeTapTouch() {
   try {
     const previousRaw = loadExistingResult();
     const weekRange = getCurrentWeekRange();
+    let browserSession = null;
 
     // ══ 1. Login ══════════════════════════════════════════════
     await loginToTapTouch(page);
@@ -1137,13 +1193,23 @@ async function scrapeTapTouch() {
     await wait(3000);
     const dashHTML  = await page.content();
     const dashBody  = await page.evaluate(() => document.body.innerText.substring(0, 5000));
-    fs.writeFileSync('debug-dashboard.html', dashHTML);
+    fs.writeFileSync(path.join(DEBUG_DIR, 'debug-dashboard.html'), dashHTML);
 
     // Extract embedded Chart.js data block
     const chartBlock = dashHTML.match(/\$\(document\)\.ready\(function \(\) \{[\s\S]*?"label":"Offline Sales"[\s\S]*?\}\);/)?.[0] || '';
     console.log('[Scraper] Dashboard chart block found:', chartBlock.length > 0);
 
     const dashboardSid = new URL(page.url()).searchParams.get('sid');
+    const sessionCookies = await page.cookies(BASE);
+    browserSession = {
+      sid: dashboardSid || null,
+      cookies: sessionCookies,
+      cookieHeader: sessionCookies
+        .filter(cookie => cookie?.name && cookie?.value)
+        .map(cookie => `${cookie.name}=${cookie.value}`)
+        .join('; '),
+      createdAt: new Date().toISOString(),
+    };
 
     console.log('[Scraper] Loading weekly dashboard...');
     await page.goto(buildDashboardUrl({
@@ -1272,6 +1338,7 @@ async function scrapeTapTouch() {
         'complete',
         `⚡ 核心数据已更新，最近订单详情已就绪（已缓存 ${detailReadyCount}/${totalDetails}）`
       );
+      finalResult.session = browserSession;
       const sizeMB = (fs.statSync(SCRAPE_RESULT_PATH).size / 1024 / 1024).toFixed(2);
       console.log(`\n[Scraper] ✅ Done! scrape-result.json (${sizeMB} MB)`);
       console.log(`  Orders:          ${allOrders.length}`);
@@ -1333,6 +1400,7 @@ async function scrapeTapTouch() {
     await Promise.all(workerTasks);
 
     const finalResult = saveSnapshot('complete', `✅ 数据更新成功（${detailReadyCount}/${totalDetails} 详情就绪）`);
+    finalResult.session = browserSession;
     const sizeMB = (fs.statSync(SCRAPE_RESULT_PATH).size / 1024 / 1024).toFixed(2);
     console.log(`\n[Scraper] ✅ Done! scrape-result.json (${sizeMB} MB)`);
     console.log(`  Orders:          ${allOrders.length}`);
@@ -1345,7 +1413,7 @@ async function scrapeTapTouch() {
 
   } catch (err) {
     console.error('[Scraper] ❌', err.message);
-    try { await page.screenshot({ path: 'debug-error.png' }); } catch {}
+    try { await page.screenshot({ path: path.join(DEBUG_DIR, 'debug-error.png') }); } catch {}
     await browser.close();
     throw err;
   }

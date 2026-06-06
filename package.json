@@ -6,13 +6,18 @@
   "scripts": {
     "start": "node server.js",
     "scrape": "node scraper.js",
-    "check": "node --check server.js && node --check scraper.js && node --check app.js && node --check browser.js && node --check mini-express.js",
-    "test": "npm run check"
+    "check": "node --check server.js && node --check scraper.js && node --check app.js && node --check browser.js && node --check mini-express.js && node --check runtime-config.js",
+    "test": "node __tests__/run-tests.js",
+    "test:jest": "jest",
+    "test:coverage": "jest --coverage"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
     "puppeteer-core": "^25.1.0"
+  },
+  "devDependencies": {
+    "jest": "^30.4.2"
   }
 }

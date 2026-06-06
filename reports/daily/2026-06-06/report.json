@@ -1,0 +1,476 @@
+{
+  "version": 1,
+  "dateKey": "2026-06-06",
+  "generatedAt": "2026-06-06T04:21:17.997Z",
+  "generatedBy": "PROSPERITY-XH report-agent",
+  "today": {
+    "totalRevenue": 888.6,
+    "totalOrders": 38,
+    "avgTicket": 23.38,
+    "topHours": [
+      {
+        "hour": "12:00",
+        "revenue": 308.8,
+        "orders": 13
+      },
+      {
+        "hour": "13:00",
+        "revenue": 267.1,
+        "orders": 12
+      },
+      {
+        "hour": "14:00",
+        "revenue": 205.1,
+        "orders": 8
+      }
+    ],
+    "mix": {
+      "type": {
+        "Dine In": 34,
+        "Take Away": 4
+      },
+      "source": {
+        "Kiosk": 38
+      },
+      "amountBuckets": {
+        "<10": 4,
+        "10-20": 19,
+        "20-30": 8,
+        "30+": 7
+      }
+    }
+  },
+  "yesterday": {
+    "dateKey": "2026-06-05",
+    "totalOrders": 84,
+    "totalRevenue": 1900,
+    "avgTicket": 22.62,
+    "mix": {
+      "type": {
+        "Dine In": 64,
+        "Take Away": 20
+      },
+      "source": {
+        "Kiosk": 84
+      },
+      "amountBuckets": {
+        "<10": 16,
+        "10-20": 33,
+        "20-30": 14,
+        "30+": 21
+      }
+    }
+  },
+  "comparison": {
+    "fullDay": {
+      "revenue": {
+        "delta": -1011.4,
+        "pct": -53.23
+      },
+      "orders": {
+        "delta": -46
+      }
+    },
+    "sameTime": {
+      "cutoffTime": "14:19",
+      "today": {
+        "totalOrders": 38,
+        "totalRevenue": 888.6,
+        "avgTicket": 23.38
+      },
+      "yesterday": {
+        "totalOrders": 9,
+        "totalRevenue": 184.9,
+        "avgTicket": 20.54,
+        "amountBuckets": {
+          "<10": 1,
+          "10-20": 5,
+          "20-30": 2,
+          "30+": 1
+        }
+      },
+      "revenue": {
+        "delta": 703.7,
+        "pct": 380.58
+      },
+      "orders": {
+        "delta": 29
+      },
+      "avgTicket": {
+        "delta": 2.84,
+        "pct": 13.83
+      }
+    }
+  },
+  "week": {
+    "rangeLabel": "Jun 1 - 7",
+    "bestDay": {
+      "label": "Fri",
+      "fullLabel": "Fri 5 Jun",
+      "revenue": 1856.6,
+      "orders": 82,
+      "avgTicket": 22.02
+    },
+    "days": [
+      {
+        "label": "Mon",
+        "chartLabel": "Mon",
+        "weekday": "Mon",
+        "fullLabel": "Mon 1 Jun",
+        "dateKey": "2026-06-01",
+        "revenue": 865.6,
+        "orders": 49,
+        "avgTicket": 16.27,
+        "hasData": true,
+        "isToday": false
+      },
+      {
+        "label": "Tue",
+        "chartLabel": "01 Jun 2026",
+        "weekday": "Tue",
+        "fullLabel": "Tue 2 Jun",
+        "dateKey": "2026-06-02",
+        "revenue": 1242.9,
+        "orders": 63,
+        "avgTicket": 19.73,
+        "hasData": true,
+        "isToday": false
+      },
+      {
+        "label": "Wed",
+        "chartLabel": "Tue",
+        "weekday": "Wed",
+        "fullLabel": "Wed 3 Jun",
+        "dateKey": "2026-06-03",
+        "revenue": 1514,
+        "orders": 73,
+        "avgTicket": 20.17,
+        "hasData": true,
+        "isToday": false
+      },
+      {
+        "label": "Thu",
+        "chartLabel": "02 Jun 2026",
+        "weekday": "Thu",
+        "fullLabel": "Thu 4 Jun",
+        "dateKey": "2026-06-04",
+        "revenue": 959.5,
+        "orders": 45,
+        "avgTicket": 21.32,
+        "hasData": true,
+        "isToday": false
+      },
+      {
+        "label": "Fri",
+        "chartLabel": "Wed",
+        "weekday": "Fri",
+        "fullLabel": "Fri 5 Jun",
+        "dateKey": "2026-06-05",
+        "revenue": 1856.6,
+        "orders": 82,
+        "avgTicket": 22.02,
+        "hasData": true,
+        "isToday": false
+      },
+      {
+        "label": "Sat",
+        "chartLabel": "03 Jun 2026",
+        "weekday": "Sat",
+        "fullLabel": "Sat 6 Jun",
+        "dateKey": "2026-06-06",
+        "revenue": 888.6,
+        "orders": 38,
+        "avgTicket": 23.38,
+        "hasData": true,
+        "isToday": true
+      }
+    ]
+  },
+  "products": {
+    "topRevenue": [
+      {
+        "rank": 1,
+        "name": "重庆小面 Pea Sauce Noodles",
+        "code": "",
+        "category": "主食 Noodles",
+        "onlineQty": 0,
+        "onlineAmount": 0,
+        "qty": 5,
+        "amount": 81.8,
+        "sharePct": 20.47,
+        "cost": 0,
+        "profit": 81.8
+      },
+      {
+        "rank": 4,
+        "name": "招牌牛肉酸辣粉Hot & Sour Glass Noodle wi...",
+        "code": "",
+        "category": "主食 Noodles",
+        "onlineQty": 0,
+        "onlineAmount": 0,
+        "qty": 3,
+        "amount": 56.4,
+        "sharePct": 14.11,
+        "cost": 0,
+        "profit": 56.4
+      },
+      {
+        "rank": 5,
+        "name": "招牌红烧牛肉面 Signature Braised Beef No...",
+        "code": "",
+        "category": "主食 Noodles",
+        "onlineQty": 0,
+        "onlineAmount": 0,
+        "qty": 3,
+        "amount": 54.53,
+        "sharePct": 13.65,
+        "cost": 0,
+        "profit": 54.53
+      },
+      {
+        "rank": 2,
+        "name": "招牌小酥肉 Crispy Fried Pork Strips",
+        "code": "",
+        "category": "小吃 Snacks",
+        "onlineQty": 0,
+        "onlineAmount": 0,
+        "qty": 4,
+        "amount": 40.39,
+        "sharePct": 10.11,
+        "cost": 0,
+        "profit": 40.39
+      },
+      {
+        "rank": 7,
+        "name": "麻酱抄手(10pcs)Sesame Paste Wontons",
+        "code": "",
+        "category": "主食 Noodles",
+        "onlineQty": 0,
+        "onlineAmount": 0,
+        "qty": 2,
+        "amount": 33.6,
+        "sharePct": 8.41,
+        "cost": 0,
+        "profit": 33.6
+      },
+      {
+        "rank": 6,
+        "name": "锅巴土豆 Crispy Rice Crust Potatoes",
+        "code": "",
+        "category": "小吃 Snacks",
+        "onlineQty": 0,
+        "onlineAmount": 0,
+        "qty": 3,
+        "amount": 20.26,
+        "sharePct": 5.07,
+        "cost": 0,
+        "profit": 20.26
+      },
+      {
+        "rank": 8,
+        "name": "炸臭豆腐 Fried Stinky Tofu (6pcs)",
+        "code": "",
+        "category": "小吃 Snacks",
+        "onlineQty": 0,
+        "onlineAmount": 0,
+        "qty": 2,
+        "amount": 19.6,
+        "sharePct": 4.9,
+        "cost": 0,
+        "profit": 19.6
+      },
+      {
+        "rank": 9,
+        "name": "抄手面（6pcs） Wonton Noodles",
+        "code": "",
+        "category": "主食 Noodles",
+        "onlineQty": 0,
+        "onlineAmount": 0,
+        "qty": 1,
+        "amount": 16.8,
+        "sharePct": 4.2,
+        "cost": 0,
+        "profit": 16.8
+      },
+      {
+        "rank": 10,
+        "name": "杂酱酸辣粉 Hot & Sour Glass Noodle with...",
+        "code": "",
+        "category": "主食 Noodles",
+        "onlineQty": 0,
+        "onlineAmount": 0,
+        "qty": 1,
+        "amount": 16.8,
+        "sharePct": 4.2,
+        "cost": 0,
+        "profit": 16.8
+      },
+      {
+        "rank": 11,
+        "name": "红油抄手（10pcs） Chongqing Spicy Wonton...",
+        "code": "",
+        "category": "主食 Noodles",
+        "onlineQty": 0,
+        "onlineAmount": 0,
+        "qty": 1,
+        "amount": 16.8,
+        "sharePct": 4.2,
+        "cost": 0,
+        "profit": 16.8
+      },
+      {
+        "rank": 12,
+        "name": "山城素面 Chongqing Vegetarian Noodles",
+        "code": "",
+        "category": "主食 Noodles",
+        "onlineQty": 0,
+        "onlineAmount": 0,
+        "qty": 1,
+        "amount": 13.51,
+        "sharePct": 3.38,
+        "cost": 0,
+        "profit": 13.51
+      },
+      {
+        "rank": 3,
+        "name": "自取软饮 Soft Drink(self pickup)",
+        "code": "",
+        "category": "饮品 Drinks",
+        "onlineQty": 0,
+        "onlineAmount": 0,
+        "qty": 4,
+        "amount": 13.02,
+        "sharePct": 3.26,
+        "cost": 0,
+        "profit": 13.02
+      },
+      {
+        "rank": 13,
+        "name": "薯塔 Tornado Potato",
+        "code": "",
+        "category": "小吃 Snacks",
+        "onlineQty": 0,
+        "onlineAmount": 0,
+        "qty": 1,
+        "amount": 8.8,
+        "sharePct": 2.2,
+        "cost": 0,
+        "profit": 8.8
+      },
+      {
+        "rank": 14,
+        "name": "香芋地瓜丸 Taro Sweet Potato Balls (6pcs...",
+        "code": "",
+        "category": "小吃 Snacks",
+        "onlineQty": 0,
+        "onlineAmount": 0,
+        "qty": 1,
+        "amount": 7.3,
+        "sharePct": 1.83,
+        "cost": 0,
+        "profit": 7.3
+      }
+    ],
+    "lowContribution": [
+      {
+        "rank": 14,
+        "name": "香芋地瓜丸 Taro Sweet Potato Balls (6pcs...",
+        "code": "",
+        "category": "小吃 Snacks",
+        "onlineQty": 0,
+        "onlineAmount": 0,
+        "qty": 1,
+        "amount": 7.3,
+        "sharePct": 1.83,
+        "cost": 0,
+        "profit": 7.3
+      },
+      {
+        "rank": 13,
+        "name": "薯塔 Tornado Potato",
+        "code": "",
+        "category": "小吃 Snacks",
+        "onlineQty": 0,
+        "onlineAmount": 0,
+        "qty": 1,
+        "amount": 8.8,
+        "sharePct": 2.2,
+        "cost": 0,
+        "profit": 8.8
+      },
+      {
+        "rank": 3,
+        "name": "自取软饮 Soft Drink(self pickup)",
+        "code": "",
+        "category": "饮品 Drinks",
+        "onlineQty": 0,
+        "onlineAmount": 0,
+        "qty": 4,
+        "amount": 13.02,
+        "sharePct": 3.26,
+        "cost": 0,
+        "profit": 13.02
+      },
+      {
+        "rank": 12,
+        "name": "山城素面 Chongqing Vegetarian Noodles",
+        "code": "",
+        "category": "主食 Noodles",
+        "onlineQty": 0,
+        "onlineAmount": 0,
+        "qty": 1,
+        "amount": 13.51,
+        "sharePct": 3.38,
+        "cost": 0,
+        "profit": 13.51
+      },
+      {
+        "rank": 9,
+        "name": "抄手面（6pcs） Wonton Noodles",
+        "code": "",
+        "category": "主食 Noodles",
+        "onlineQty": 0,
+        "onlineAmount": 0,
+        "qty": 1,
+        "amount": 16.8,
+        "sharePct": 4.2,
+        "cost": 0,
+        "profit": 16.8
+      }
+    ],
+    "topTwoRevenue": 138.2,
+    "topTwoSharePct": 15.55
+  },
+  "agent": {
+    "mode": "rules",
+    "hasOpenAISummary": false
+  },
+  "sections": {
+    "executiveSummary": [
+      "今天营业额 AUD 888.6，昨天全天 AUD 1900.0，如果直接看全天口径，今天少了 53.2%。",
+      "截至 14:19，今天收入 比昨天同一时间高 AUD 703.7（+380.6%）。 但今天订单数更多，问题主要出在客单价从 AUD 20.54 掉到 AUD 23.38。",
+      "今天低于 AUD 10 的订单有 4 单，昨天同一时间是 1 单；同时 AUD 20-30 的订单从 2 单降到 8 单。",
+      "重庆小面 Pea Sauce Noodles 和 招牌牛肉酸辣粉Hot & Sour Glass Noodle wi... 两款合计带来 AUD 138.20，是今天最主要的营收支柱。"
+    ],
+    "keyFindings": [
+      "今天的问题不是客流不足，而是高金额订单密度不够。",
+      "本周目前最强的一天是 Fri 5 Jun，它同时赢了订单数和客单价。",
+      "热销主食仍然有稳定拉动作用，说明问题更像是结构性变薄，而不是核心招牌失灵。"
+    ],
+    "recommendations": [
+      "晚市优先拉高每单金额，不要只追单量，重点推主食 + 小吃 / 饮品组合。",
+      "继续把 重庆小面 Pea Sauce Noodles 放在最显眼位置，它仍然是今天最强的单品引流和营收来源。",
+      "如果你要看真实低利润品而不是低销售贡献品，下一步要把菜品成本字段补进数据源。"
+    ],
+    "furtherQuestions": [
+      "昨天 14:19 前有哪些高金额组合单今天没有出现？",
+      "晚市结束后，客单价有没有被晚餐时段拉回到昨天水平？",
+      "低于 AUD 10 的订单里，饮品、小吃和打包附加项各占多少？"
+    ],
+    "caveats": [
+      "今天仍是营业中快照，不是收档后的全天最终结果。",
+      "当前 low-profit 判断只能按低销售贡献近似，因为成本字段仍是 0。"
+    ]
+  },
+  "html": "<!DOCTYPE html>\n<html lang=\"zh-CN\">\n<head>\n  <meta charset=\"UTF-8\" />\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />\n  <title>PROSPERITY XH Daily Report - 2026-06-06</title>\n  <style>\n    body { font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; margin: 0; background: #f6f8fc; color: #1f2430; }\n    .wrap { max-width: 1040px; margin: 0 auto; padding: 32px 20px 60px; }\n    h1, h2 { margin: 0 0 12px; }\n    h1 { font-size: 32px; }\n    h2 { font-size: 22px; margin-top: 0; }\n    p { line-height: 1.7; color: #3b4252; }\n    .card { background: #fff; border: 1px solid #dde3ef; border-radius: 20px; padding: 22px; margin-top: 18px; box-shadow: 0 10px 25px rgba(32, 51, 84, 0.05); }\n    .top-note { font-size: 13px; color: #6f768a; }\n    .summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }\n    .metric { background: #f9fbff; border: 1px solid #dde3ef; border-radius: 16px; padding: 16px; }\n    .metric .label { font-size: 12px; text-transform: uppercase; color: #6f768a; font-weight: 700; letter-spacing: .06em; }\n    .metric .value { font-size: 28px; font-weight: 800; margin-top: 8px; }\n    .metric .sub { font-size: 13px; color: #6f768a; margin-top: 8px; }\n    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }\n    .bullet-list { padding-left: 20px; margin: 0; }\n    .bullet-list li { margin: 10px 0; line-height: 1.65; color: #3b4252; }\n    table { width: 100%; border-collapse: collapse; margin-top: 8px; }\n    th, td { padding: 10px 8px; border-bottom: 1px solid #e6e8f0; text-align: left; font-size: 14px; }\n    th { color: #6f768a; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }\n    .bar-list-row { margin-bottom: 14px; }\n    .bar-list-copy { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 6px; font-size: 14px; }\n    .bar-list-label { color: #1f2430; font-weight: 600; }\n    .bar-list-value { color: #4c5467; }\n    .bar-list-track { height: 10px; background: #eef2fa; border-radius: 999px; overflow: hidden; }\n    .bar-list-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, #7fa4f9 0%, #5477c4 100%); }\n    .inline-code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #f1f4fb; padding: 2px 6px; border-radius: 6px; }\n    @media (max-width: 860px) { .summary-grid, .two-col { grid-template-columns: 1fr; } }\n  </style>\n</head>\n<body>\n  <div class=\"wrap\">\n    <h1>PROSPERITY XH 每日营业报告</h1>\n    <p class=\"top-note\">营业日 2026-06-06 · 生成时间 2026-06-06T04:21:17.997Z · Agent mode: <span class=\"inline-code\">rules</span></p>\n\n    <section class=\"card\">\n      <h2>Executive Summary</h2>\n      <ul class=\"bullet-list\">\n        <li>今天营业额 AUD 888.6，昨天全天 AUD 1900.0，如果直接看全天口径，今天少了 53.2%。</li><li>截至 14:19，今天收入 比昨天同一时间高 AUD 703.7（+380.6%）。 但今天订单数更多，问题主要出在客单价从 AUD 20.54 掉到 AUD 23.38。</li><li>今天低于 AUD 10 的订单有 4 单，昨天同一时间是 1 单；同时 AUD 20-30 的订单从 2 单降到 8 单。</li><li>重庆小面 Pea Sauce Noodles 和 招牌牛肉酸辣粉Hot &amp; Sour Glass Noodle wi... 两款合计带来 AUD 138.20，是今天最主要的营收支柱。</li>\n      </ul>\n      <div class=\"summary-grid\">\n        \n          <div class=\"metric\">\n            <div class=\"label\">Today Revenue</div>\n            <div class=\"value\">$888.6</div>\n            <div class=\"sub\">Today to 14:19</div>\n          </div>\n        \n          <div class=\"metric\">\n            <div class=\"label\">Vs Yesterday Full Day</div>\n            <div class=\"value\">-53.2%</div>\n            <div class=\"sub\">Yesterday full day was $1900.0</div>\n          </div>\n        \n          <div class=\"metric\">\n            <div class=\"label\">Vs Yesterday Same Time</div>\n            <div class=\"value\">+$703.7</div>\n            <div class=\"sub\">Cutoff 14:19</div>\n          </div>\n        \n          <div class=\"metric\">\n            <div class=\"label\">Avg Ticket</div>\n            <div class=\"value\">$23.38</div>\n            <div class=\"sub\">Yesterday same time was $20.54</div>\n          </div>\n        \n      </div>\n    </section>\n\n    \n    <section class=\"card\">\n      <h2>Key Findings</h2>\n      <ul class=\"bullet-list\">\n        <li>今天的问题不是客流不足，而是高金额订单密度不够。</li><li>本周目前最强的一天是 Fri 5 Jun，它同时赢了订单数和客单价。</li><li>热销主食仍然有稳定拉动作用，说明问题更像是结构性变薄，而不是核心招牌失灵。</li>\n      </ul>\n    </section>\n  \n\n    <section class=\"card two-col\">\n      <div>\n        <h2>本周营业表现</h2>\n        <p>本周目前最好的营业日是 <strong>Fri 5 Jun</strong>，收入 $1856.6，订单 82 单，客单价 $22.02。</p>\n        <table>\n          <thead>\n            <tr><th>Date</th><th>Revenue</th><th>Orders</th><th>Avg Ticket</th><th>Status</th></tr>\n          </thead>\n          <tbody>\n    <tr>\n      <td>Mon 1 Jun</td>\n      <td>$865.6</td>\n      <td>49</td>\n      <td>$16.27</td>\n      <td>Full day</td>\n    </tr>\n  \n    <tr>\n      <td>Tue 2 Jun</td>\n      <td>$1242.9</td>\n      <td>63</td>\n      <td>$19.73</td>\n      <td>Full day</td>\n    </tr>\n  \n    <tr>\n      <td>Wed 3 Jun</td>\n      <td>$1514.0</td>\n      <td>73</td>\n      <td>$20.17</td>\n      <td>Full day</td>\n    </tr>\n  \n    <tr>\n      <td>Thu 4 Jun</td>\n      <td>$959.5</td>\n      <td>45</td>\n      <td>$21.32</td>\n      <td>Full day</td>\n    </tr>\n  \n    <tr>\n      <td>Fri 5 Jun</td>\n      <td>$1856.6</td>\n      <td>82</td>\n      <td>$22.02</td>\n      <td>Full day</td>\n    </tr>\n  \n    <tr>\n      <td>Sat 6 Jun</td>\n      <td>$888.6</td>\n      <td>38</td>\n      <td>$23.38</td>\n      <td>Partial day</td>\n    </tr>\n  </tbody>\n        </table>\n      </div>\n      <div>\n        <h2>今日高峰时段</h2>\n        <p>今天的营业高峰仍然集中在午餐档，下面是当前已出数据里收入最高的时段。</p>\n        \n      <div class=\"bar-list-row\">\n        <div class=\"bar-list-copy\">\n          <div class=\"bar-list-label\">12:00 · 13 单</div>\n          <div class=\"bar-list-value\">$308.8</div>\n        </div>\n        <div class=\"bar-list-track\"><div class=\"bar-list-fill\" style=\"width:100%\"></div></div>\n      </div>\n    \n      <div class=\"bar-list-row\">\n        <div class=\"bar-list-copy\">\n          <div class=\"bar-list-label\">13:00 · 12 单</div>\n          <div class=\"bar-list-value\">$267.1</div>\n        </div>\n        <div class=\"bar-list-track\"><div class=\"bar-list-fill\" style=\"width:86%\"></div></div>\n      </div>\n    \n      <div class=\"bar-list-row\">\n        <div class=\"bar-list-copy\">\n          <div class=\"bar-list-label\">14:00 · 8 单</div>\n          <div class=\"bar-list-value\">$205.1</div>\n        </div>\n        <div class=\"bar-list-track\"><div class=\"bar-list-fill\" style=\"width:66%\"></div></div>\n      </div>\n    \n      </div>\n    </section>\n\n    <section class=\"card two-col\">\n      <div>\n        <h2>拉动营业额的菜品</h2>\n        <p>今天营收主要由主食和头部小吃支撑。前两名单品合计贡献 $138.20，占今天营业额 15.6%。</p>\n        <table>\n          <thead>\n            <tr><th>Product</th><th>Category</th><th>Qty</th><th>Revenue</th><th>Share</th></tr>\n          </thead>\n          <tbody>\n    <tr>\n      <td>重庆小面 Pea Sauce Noodles</td>\n      <td>主食 Noodles</td>\n      <td>5</td>\n      <td>$81.80</td>\n      <td>20.47%</td>\n    </tr>\n  \n    <tr>\n      <td>招牌牛肉酸辣粉Hot &amp; Sour Glass Noodle wi...</td>\n      <td>主食 Noodles</td>\n      <td>3</td>\n      <td>$56.40</td>\n      <td>14.11%</td>\n    </tr>\n  \n    <tr>\n      <td>招牌红烧牛肉面 Signature Braised Beef No...</td>\n      <td>主食 Noodles</td>\n      <td>3</td>\n      <td>$54.53</td>\n      <td>13.65%</td>\n    </tr>\n  \n    <tr>\n      <td>招牌小酥肉 Crispy Fried Pork Strips</td>\n      <td>小吃 Snacks</td>\n      <td>4</td>\n      <td>$40.39</td>\n      <td>10.11%</td>\n    </tr>\n  \n    <tr>\n      <td>麻酱抄手(10pcs)Sesame Paste Wontons</td>\n      <td>主食 Noodles</td>\n      <td>2</td>\n      <td>$33.60</td>\n      <td>8.41%</td>\n    </tr>\n  \n    <tr>\n      <td>锅巴土豆 Crispy Rice Crust Potatoes</td>\n      <td>小吃 Snacks</td>\n      <td>3</td>\n      <td>$20.26</td>\n      <td>5.07%</td>\n    </tr>\n  </tbody>\n        </table>\n      </div>\n      <div>\n        <h2>低贡献 / 待观察品项</h2>\n        <p>当前接口里的成本字段仍是 0，所以这里先按低销售贡献展示，不把它误当作真实毛利率判断。</p>\n        \n      <div class=\"bar-list-row\">\n        <div class=\"bar-list-copy\">\n          <div class=\"bar-list-label\">香芋地瓜丸 Taro Sweet Potato Balls (6pcs...</div>\n          <div class=\"bar-list-value\">$7.30</div>\n        </div>\n        <div class=\"bar-list-track\"><div class=\"bar-list-fill\" style=\"width:43%\"></div></div>\n      </div>\n    \n      <div class=\"bar-list-row\">\n        <div class=\"bar-list-copy\">\n          <div class=\"bar-list-label\">薯塔 Tornado Potato</div>\n          <div class=\"bar-list-value\">$8.80</div>\n        </div>\n        <div class=\"bar-list-track\"><div class=\"bar-list-fill\" style=\"width:52%\"></div></div>\n      </div>\n    \n      <div class=\"bar-list-row\">\n        <div class=\"bar-list-copy\">\n          <div class=\"bar-list-label\">自取软饮 Soft Drink(self pickup)</div>\n          <div class=\"bar-list-value\">$13.02</div>\n        </div>\n        <div class=\"bar-list-track\"><div class=\"bar-list-fill\" style=\"width:77%\"></div></div>\n      </div>\n    \n      <div class=\"bar-list-row\">\n        <div class=\"bar-list-copy\">\n          <div class=\"bar-list-label\">山城素面 Chongqing Vegetarian Noodles</div>\n          <div class=\"bar-list-value\">$13.51</div>\n        </div>\n        <div class=\"bar-list-track\"><div class=\"bar-list-fill\" style=\"width:80%\"></div></div>\n      </div>\n    \n      <div class=\"bar-list-row\">\n        <div class=\"bar-list-copy\">\n          <div class=\"bar-list-label\">抄手面（6pcs） Wonton Noodles</div>\n          <div class=\"bar-list-value\">$16.80</div>\n        </div>\n        <div class=\"bar-list-track\"><div class=\"bar-list-fill\" style=\"width:100%\"></div></div>\n      </div>\n    \n      </div>\n    </section>\n\n    \n    <section class=\"card\">\n      <h2>Recommended Next Steps</h2>\n      <ul class=\"bullet-list\">\n        <li>晚市优先拉高每单金额，不要只追单量，重点推主食 + 小吃 / 饮品组合。</li><li>继续把 重庆小面 Pea Sauce Noodles 放在最显眼位置，它仍然是今天最强的单品引流和营收来源。</li><li>如果你要看真实低利润品而不是低销售贡献品，下一步要把菜品成本字段补进数据源。</li>\n      </ul>\n    </section>\n  \n    \n    <section class=\"card\">\n      <h2>Further Questions</h2>\n      <ul class=\"bullet-list\">\n        <li>昨天 14:19 前有哪些高金额组合单今天没有出现？</li><li>晚市结束后，客单价有没有被晚餐时段拉回到昨天水平？</li><li>低于 AUD 10 的订单里，饮品、小吃和打包附加项各占多少？</li>\n      </ul>\n    </section>\n  \n    \n    <section class=\"card\">\n      <h2>Caveats</h2>\n      <ul class=\"bullet-list\">\n        <li>今天仍是营业中快照，不是收档后的全天最终结果。</li><li>当前 low-profit 判断只能按低销售贡献近似，因为成本字段仍是 0。</li>\n      </ul>\n    </section>\n  \n  </div>\n</body>\n</html>"
+}

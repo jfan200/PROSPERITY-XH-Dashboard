@@ -236,14 +236,90 @@ streams:
 
 换句话说：你现在这版先稳定跑起来是正确路线。
 
+## Docker 部署
+
+现在推荐你直接用 **单容器 Docker** 部署，不再以 Vercel 为目标。
+
+这个项目之所以更适合 Docker，是因为它同时需要：
+
+- 常驻的 Node 服务
+- Chromium / Puppeteer 抓取 TapTouch
+- 定时同步
+- 本地快照缓存
+- 后续可能继续接 `go2rtc`、反向代理、健康检查
+
+### 1. 准备 Docker 环境变量
+
+先复制 Docker 专用模板：
+
+```bash
+cp .env.docker.example .env.docker
+```
+
+然后把 TapTouch 账号改成真实值：
+
+```bash
+TAPTOUCH_EMAIL=your-email@example.com
+TAPTOUCH_PASSWORD=your-password
+```
+
+### 2. 构建并启动
+
+```bash
+docker compose up -d --build
+```
+
+启动后默认访问：
+
+```text
+http://localhost:3001
+```
+
+### 3. 查看状态
+
+```bash
+docker compose ps
+docker compose logs -f dashboard
+```
+
+健康检查接口：
+
+```bash
+curl http://localhost:3001/api/healthz
+curl http://localhost:3001/api/readyz
+curl http://localhost:3001/api/runtime
+```
+
+### 4. 数据持久化
+
+Docker Compose 默认会挂一个命名卷：
+
+- `dashboard-data:/app/data`
+
+里面会保存：
+
+- `scrape-result.json`
+- 调试截图 / 调试 HTML
+- 后续运行期缓存文件
+
+这意味着容器重建后，业务快照不会立刻丢掉。
+
+### 5. 停止与更新
+
+```bash
+docker compose down
+docker compose pull
+docker compose up -d --build
+```
+
 ## 部署建议（生产）
 
-最省事的部署方式是 **1 台后端 + 多个展示端**：
+最省事的部署方式是 **1 个 Docker 容器 + 多个展示端**：
 
 1. **后端常开机器**
-   - 运行 `server.js`（Dashboard 页面 + API + TapTouch 同步都在这一个 Node 进程里）
-   - 建议用 `pm2` 或系统服务守护进程
-   - 定期备份 `scrape-result.json`
+   - 跑 `docker compose up -d`
+   - 容器里同时提供 Dashboard 页面、API、TapTouch 同步
+   - 定期备份 Docker volume 里的 `/app/data`
 
 2. **展示端（店内屏幕/安卓设备/iPad）**
    - 只打开 Dashboard 页面
@@ -251,14 +327,14 @@ streams:
 
 3. **摄像头视频（可选）**
    - 不看摄像头时不用部署 `go2rtc`
-   - 需要摄像头实时画面时，再在后端机器或同局域网另一台机器跑 `go2rtc`
+   - 需要摄像头实时画面时，再单独跑一个 `go2rtc` 容器或宿主机进程
 
 ### 建议组件
 
-- 进程守护：`pm2`（保证 Node 服务崩溃后自动重启）
-- 反向代理：`nginx`（如果需要域名、HTTPS、外网访问）
+- 主服务：当前这个 `dashboard` 容器
+- 反向代理：`nginx` 或 `caddy`（如果你后面要挂域名/HTTPS）
 - 视频服务：`go2rtc`（仅摄像头需要）
-- 日志与备份：按天轮转日志，定时备份 `scrape-result.json`
+- 日志与备份：备份 Docker volume 中的 `/app/data`
 
 ### 安卓点餐机是否可部署
 
@@ -267,13 +343,13 @@ streams:
 
 推荐方式：
 
-- 后端跑在店内常开主机/NAS/云服务器
+- 后端跑在店内常开主机 / NAS / 云服务器的 Docker 里
 - 安卓点餐机开启 kiosk 模式，仅访问 Dashboard URL
 
 ## 注意事项
 
 - 这个项目默认是本地自用，不是多租户 SaaS
-- `scrape-result.json`、`server.log`、`debug-*` 都不会提交到仓库
+- `data/`、`server.log`、`debug-*`、`.env.docker` 都不会提交到仓库
 - 如果同步失败，先检查 `.env.local`、TapTouch 登录状态和网络
 - 如果 3001 端口被占用，可以设置 `PORT=3002` 后再启动，或先运行 `pkill -f 'node server.js'`
 
@@ -283,4 +359,5 @@ streams:
 - 增加商品维度、来源维度、时段维度的更细分析
 - 给订单详情增加“已缓存 / 加载中”状态提示
 - 增加多路摄像头自动健康检查与断流重连提示
-- 增加部署脚本（PM2 + Nginx + Docker Compose）
+- 增加 `go2rtc` 的 Docker Compose 联动
+- 如果后面门店变多，再把 scraper 拆成独立 worker 容器

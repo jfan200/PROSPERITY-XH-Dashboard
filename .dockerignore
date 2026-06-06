@@ -1,0 +1,11 @@
+.git
+.gitignore
+.idea
+.DS_Store
+node_modules
+data
+server.log
+scrape-result.json
+debug-*.html
+debug-*.png
+go2rtc

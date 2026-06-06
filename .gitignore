@@ -3,6 +3,7 @@ node_modules/
 
 server.log
 scrape-result.json
+data/
 
 debug-*.html
 debug-*.png
@@ -10,3 +11,4 @@ debug-*.png
 .DS_Store
 .env
 .env.local
+.env.docker

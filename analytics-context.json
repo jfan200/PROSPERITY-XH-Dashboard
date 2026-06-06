@@ -1,0 +1,130 @@
+{
+  "area": "PROSPERITY XH store operations",
+  "intendedUsers": [
+    "store owner",
+    "shift lead",
+    "future Data Analytics workflows"
+  ],
+  "coverageLevel": "Directional",
+  "lastSynthesized": "2026-06-03",
+  "timeZone": "Australia/Melbourne",
+  "freshnessExpectation": "Core metrics are current only after a successful TapTouch sync. Historical context depends on cached scrape snapshots and stored day-level order history.",
+  "sourceInventory": [
+    {
+      "name": "TapTouch Backoffice",
+      "type": "operational source system",
+      "locator": "https://backoffice.taptouch.net",
+      "useFor": "Sales summaries, orders, receipts, product performance",
+      "status": "Primary source"
+    },
+    {
+      "name": "Local scrape snapshot",
+      "type": "cached JSON",
+      "locator": "/Users/jinhua/Documents/GitHub/PROSPERITY-XH-Dashboard/data/scrape-result.json",
+      "useFor": "Fallback reads, historical order cache, product snapshots",
+      "status": "Directional support"
+    },
+    {
+      "name": "Dashboard API layer",
+      "type": "Node HTTP API",
+      "locator": "/Users/jinhua/Documents/GitHub/PROSPERITY-XH-Dashboard/server.js",
+      "useFor": "Canonical website metrics, product analysis payloads, date-based order lookups",
+      "status": "Website-serving layer"
+    }
+  ],
+  "keyMetrics": [
+    {
+      "name": "Total revenue",
+      "definition": "Gross sales amount shown in the dashboard summary for the active business date.",
+      "grain": "day",
+      "canonicalSource": "GET /api/sales/summary",
+      "caveats": "Depends on the latest successful TapTouch sync and local timezone handling."
+    },
+    {
+      "name": "Total orders",
+      "definition": "Count of non-summary orders returned for the active business date.",
+      "grain": "day",
+      "canonicalSource": "GET /api/orders/recent or GET /api/orders/by-date",
+      "caveats": "Summary-like rows are filtered out before API mapping."
+    },
+    {
+      "name": "Average ticket",
+      "definition": "Total revenue divided by total orders for the selected date.",
+      "grain": "day",
+      "canonicalSource": "GET /api/sales/summary",
+      "caveats": "Should be treated as derived, not independently sourced."
+    },
+    {
+      "name": "Peak hour revenue",
+      "definition": "Highest hourly revenue bucket within the current day timeline.",
+      "grain": "hour",
+      "canonicalSource": "GET /api/sales/hourly",
+      "caveats": "Requires a populated hourly sales array."
+    },
+    {
+      "name": "Product revenue and profit",
+      "definition": "Per-SKU sales amount and estimated profit returned by the product analysis workflow.",
+      "grain": "product by day or week",
+      "canonicalSource": "GET /api/products/analysis",
+      "caveats": "Profit quality depends on the upstream product report cost fields."
+    },
+    {
+      "name": "Receipt cache coverage",
+      "definition": "Number of orders whose detailed receipt has already been fetched and cached locally.",
+      "grain": "order",
+      "canonicalSource": "GET /api/orders/by-date and GET /api/orders/details",
+      "caveats": "Coverage increases over time because receipt detail is fetched on demand and via background workers."
+    }
+  ],
+  "dimensions": [
+    "business date",
+    "hour of day",
+    "payment method",
+    "order source",
+    "order type",
+    "product name",
+    "product category",
+    "cashier"
+  ],
+  "queryPatterns": [
+    {
+      "name": "Daily store pulse",
+      "useWhen": "Checking how the restaurant performed today.",
+      "apiRoutes": [
+        "/api/sales/summary",
+        "/api/sales/hourly",
+        "/api/orders/recent"
+      ]
+    },
+    {
+      "name": "Historical order audit",
+      "useWhen": "Reviewing a previous day or validating a specific order list.",
+      "apiRoutes": [
+        "/api/orders/by-date?date=YYYY-MM-DD",
+        "/api/orders/detail/:key"
+      ]
+    },
+    {
+      "name": "Menu performance analysis",
+      "useWhen": "Ranking SKUs, checking concentration risk, and spotting growth or decline.",
+      "apiRoutes": [
+        "/api/products/analysis?mode=today|date|week"
+      ]
+    }
+  ],
+  "gotchas": [
+    "The repo currently uses cached local JSON plus live TapTouch sync, so stale cache and fresh sync can briefly disagree.",
+    "Historical depth is strongest for orders that have already been fetched or cached; not every past date has the same coverage.",
+    "There is no warehouse connector yet, so future Data Analytics work should treat this layer as app-semantic guidance rather than full source-of-truth validation."
+  ],
+  "openQuestions": [
+    "Whether product category mappings should be normalized into a dedicated dimension instead of relying on report labels.",
+    "Whether store labor, inventory, and promotion context should become additional source lanes for broader operational analysis.",
+    "Whether long-term weekly and monthly retention of scrape snapshots should be formalized for trend reporting."
+  ],
+  "futurePrompts": [
+    "@Data Analytics diagnose why today's revenue is above or below this week's average for PROSPERITY XH.",
+    "@Data Analytics analyze the top product concentration risk in PROSPERITY XH and recommend what to promote next.",
+    "@Data Analytics review receipt cache coverage and tell me what data is still missing for a complete order audit."
+  ]
+}

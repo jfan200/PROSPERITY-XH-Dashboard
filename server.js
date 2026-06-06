@@ -9,6 +9,7 @@ const express  = require('./mini-express');
 const path     = require('path');
 const fs       = require('fs');
 const { spawn } = require('child_process');
+const { createDailySalesReport, persistDailySalesReport } = require('./report-agent');
 const {
   createSessionByLogin,
   fetchCoreDataWithSession,
@@ -19,13 +20,31 @@ const {
   fetchOrdersForDate,
   fetchSingleOrderDetail,
   parseReceiptDetail,
+  scrapeTapTouch,
 } = require('./scraper');
+const {
+  APP_ROOT,
+  LEGACY_SCRAPE_RESULT_PATH,
+  SCRAPE_RESULT_PATH,
+  REPORTS_DIR,
+  DEPLOY_TARGET,
+  SCRAPER_EXECUTION_MODE,
+  isServerless,
+  ENABLE_BACKGROUND_JOBS,
+  ENABLE_FILE_WATCH,
+  ENABLE_SCRAPER_API,
+  ensureRuntimeDirectories,
+} = require('./runtime-config');
 
 const app  = express();
 const PORT = Number(process.env.PORT || 3001);
 const COOKIE_REFRESH_MS = Math.max(5 * 60 * 1000, Number(process.env.TAPTOUCH_COOKIE_REFRESH_MS || 30 * 60 * 1000));
 const AUTO_FETCH_MS = Math.max(60 * 1000, Number(process.env.TAPTOUCH_AUTO_FETCH_MS || 5 * 60 * 1000));
 const DETAIL_PREFETCH_WORKERS = Math.max(1, Number(process.env.TAPTOUCH_DETAIL_PREFETCH_WORKERS || process.env.DETAIL_PREFETCH_WORKERS || 2));
+const ANALYTICS_CONTEXT_PATH = path.join(APP_ROOT, 'analytics-context.json');
+const REPORT_AGENT_MODE = String(process.env.REPORT_AGENT_MODE || 'rules').trim().toLowerCase();
+const REPORT_AGENT_OPENAI_MODEL = String(process.env.REPORT_AGENT_OPENAI_MODEL || 'gpt-4.1-mini').trim();
+const AUTO_DAILY_REPORT_ENABLED = /^(1|true|yes)$/i.test(process.env.REPORT_AGENT_AUTO_GENERATE || 'true');
 
 function hasConfiguredTapTouchCredentials() {
   const email = String(process.env.TAPTOUCH_EMAIL || '').trim();
@@ -40,6 +59,8 @@ function hasConfiguredTapTouchCredentials() {
 
 const AUTO_SYNC_ENABLED = /^(1|true|yes)$/i.test(process.env.TAPTOUCH_AUTO_SYNC || 'true')
   && hasConfiguredTapTouchCredentials();
+
+ensureRuntimeDirectories();
 
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -58,10 +79,10 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.static(path.join(__dirname)));
+app.use(express.static(APP_ROOT));
 
 // ============================================================
-// PARSE REAL TAPTOUCH DATA FROM scrape-result.json
+// PARSE REAL TAPTOUCH DATA FROM cached snapshot
 // ============================================================
 const WEEKDAY_MON = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -188,6 +209,49 @@ function buildOrdersDataset(orders = [], meta = {}) {
     avgTicket: totalOrders > 0 ? round2(totalRevenue / totalOrders) : 0,
     cachedDetails: mappedOrders.filter(order => order.detailCached).length,
     orders: mappedOrders,
+  };
+}
+
+function readAnalyticsContextConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(ANALYTICS_CONTEXT_PATH, 'utf8'));
+  } catch (error) {
+    return {
+      area: 'PROSPERITY XH store operations',
+      coverageLevel: 'Limited',
+      keyMetrics: [],
+      sourceInventory: [],
+      dimensions: [],
+      queryPatterns: [],
+      gotchas: ['analytics-context.json is missing or unreadable'],
+      futurePrompts: [],
+    };
+  }
+}
+
+function buildAnalyticsContextPayload() {
+  const base = readAnalyticsContextConfig();
+  const data = cache.data || {};
+  const runtimeOrderDetails = cache.data?.orderDetails || cache.raw?.orderDetails || {};
+  const runtimeOrdersByDate = cache.raw?.ordersByDate || {};
+
+  return {
+    ...base,
+    runtime: {
+      hasLiveData: !!cache.hasLiveData,
+      dataSource: cache.hasLiveData ? 'taptouch_live' : 'cache_or_empty',
+      storeName: data.storeName || 'PROSPERITY XH',
+      brandName: data.brandName || '',
+      lastUpdated: cache.lastUpdated || null,
+      scrapedAt: data.scrapedAt || null,
+      ordersDateKey: data.ordersDateKey || null,
+      availableData: {
+        products: Array.isArray(data.products) ? data.products.length : 0,
+        recentOrders: Array.isArray(data.recentOrders) ? data.recentOrders.length : 0,
+        cachedOrderDetails: Object.keys(runtimeOrderDetails).length,
+        historicalDateCaches: Object.keys(runtimeOrdersByDate).length,
+      },
+    },
   };
 }
 
@@ -707,11 +771,20 @@ const detailPrefetchQueuedSet = new Set();
 let detailPrefetchActive = 0;
 let tapTouchSession = null;
 let cookieRefreshPromise = null;
+let dailyReportPromise = null;
 const autoSyncState = {
   cookieLastRefreshedAt: null,
   dataLastFetchedAt: null,
   running: false,
   cookieRefreshing: false,
+  lastError: null,
+};
+const dailyReportState = {
+  running: false,
+  lastGeneratedAt: null,
+  lastDateKey: null,
+  lastHtmlPath: null,
+  agentMode: REPORT_AGENT_MODE,
   lastError: null,
 };
 
@@ -751,8 +824,17 @@ function normalizeCachedOrderDetails(raw) {
 
 function loadData() {
   try {
-    const filePath = path.join(__dirname, 'scrape-result.json');
-    const raw = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    if (!fs.existsSync(SCRAPE_RESULT_PATH)) {
+      if (fs.existsSync(LEGACY_SCRAPE_RESULT_PATH)) {
+        fs.copyFileSync(LEGACY_SCRAPE_RESULT_PATH, SCRAPE_RESULT_PATH);
+        console.log(`[Server] Migrated legacy snapshot to ${SCRAPE_RESULT_PATH}`);
+      } else {
+        console.log(`[Server] ℹ️ Snapshot not found yet: ${SCRAPE_RESULT_PATH}`);
+        return false;
+      }
+    }
+
+    const raw = JSON.parse(fs.readFileSync(SCRAPE_RESULT_PATH, 'utf8'));
     normalizeCachedOrderDetails(raw);
     cache.raw  = raw;
     cache.data = parseTapTouchData(raw);
@@ -763,7 +845,7 @@ function loadData() {
     console.log(`[Server] ✅ Loaded: $${d.totalRevenue} / ${d.totalOrders} orders / ${d.hourlySales.filter(h=>h.revenue>0).length} active hours`);
     return true;
   } catch (e) {
-    console.error('[Server] ❌ Failed to load scrape-result.json:', e.message);
+    console.error(`[Server] ❌ Failed to load snapshot (${SCRAPE_RESULT_PATH}):`, e.message);
     return false;
   }
 }
@@ -772,13 +854,111 @@ function findRawOrderByKey(key) {
   return findOrderInRaw(cache.raw, key);
 }
 
+function readLatestDailyReportMeta() {
+  const latestPath = path.join(REPORTS_DIR, 'daily', 'latest.json');
+  if (!fs.existsSync(latestPath)) return null;
+
+  try {
+    return JSON.parse(fs.readFileSync(latestPath, 'utf8'));
+  } catch (error) {
+    return null;
+  }
+}
+
+function readLatestDailyReportBundle() {
+  const latestMeta = readLatestDailyReportMeta();
+  if (!latestMeta?.jsonPath) return null;
+
+  const relativeJsonPath = String(latestMeta.jsonPath || '').replace(/^\//, '');
+  const absoluteJsonPath = path.join(APP_ROOT, relativeJsonPath);
+  if (!fs.existsSync(absoluteJsonPath)) return null;
+
+  try {
+    const report = JSON.parse(fs.readFileSync(absoluteJsonPath, 'utf8'));
+    return {
+      meta: latestMeta,
+      report,
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
+async function generateDailySalesReportBundle(options = {}) {
+  if (!cache.hasLiveData) {
+    throw new Error('No live TapTouch data available for daily report generation');
+  }
+
+  if (dailyReportPromise && !options.force) {
+    return dailyReportPromise;
+  }
+
+  dailyReportPromise = (async () => {
+    dailyReportState.running = true;
+    dailyReportState.lastError = null;
+
+    try {
+      const dateKey = cache.data?.ordersDateKey || getTodayDateKey();
+      const yesterdayDateKey = shiftDateKey(dateKey, -1);
+      const yesterdayPayload = await getOrdersForDatePayload(yesterdayDateKey);
+      const report = await createDailySalesReport({
+        summary: {
+          ordersDateKey: dateKey,
+          totalRevenue: cache.data?.totalRevenue || 0,
+          totalOrders: cache.data?.totalOrders || 0,
+          avgTicket: cache.data?.avgTicket || 0,
+          weeklyOverview: cache.data?.weeklyOverview || {},
+          products: cache.data?.products || [],
+        },
+        hourlySales: cache.data?.hourlySales || [],
+        todayOrders: cache.data?.recentOrders || [],
+        yesterdayOrders: yesterdayPayload?.orders || [],
+      }, {
+        mode: options.mode || REPORT_AGENT_MODE,
+        openAIApiKey: process.env.OPENAI_API_KEY || '',
+        openAIModel: process.env.REPORT_AGENT_OPENAI_MODEL || REPORT_AGENT_OPENAI_MODEL,
+      });
+
+      const meta = persistDailySalesReport(report, REPORTS_DIR);
+      dailyReportState.lastGeneratedAt = report.generatedAt;
+      dailyReportState.lastDateKey = report.dateKey;
+      dailyReportState.lastHtmlPath = meta.htmlPath;
+      dailyReportState.agentMode = meta.agentMode;
+
+      return {
+        meta,
+        report,
+      };
+    } catch (error) {
+      dailyReportState.lastError = error.message || 'Daily report generation failed';
+      throw error;
+    } finally {
+      dailyReportState.running = false;
+      dailyReportPromise = null;
+    }
+  })();
+
+  return dailyReportPromise;
+}
+
+function queueAutoDailyReportGeneration(reason = 'snapshot_reload') {
+  if (!AUTO_DAILY_REPORT_ENABLED || !cache.hasLiveData) return;
+
+  generateDailySalesReportBundle()
+    .then(result => {
+      console.log(`[Report Agent] Updated daily report for ${result.meta.dateKey} (${reason})`);
+    })
+    .catch(error => {
+      console.error(`[Report Agent] Failed to generate daily report (${reason}):`, error.message);
+    });
+}
+
 function persistOrderDetail(key, detail) {
   if (!cache.raw) cache.raw = {};
   if (!cache.raw.orderDetails) cache.raw.orderDetails = {};
   cache.raw.orderDetails[key] = detail;
 
-  const filePath = path.join(__dirname, 'scrape-result.json');
-  fs.writeFileSync(filePath, JSON.stringify(cache.raw, null, 2));
+  fs.writeFileSync(SCRAPE_RESULT_PATH, JSON.stringify(cache.raw, null, 2));
   loadData();
 }
 
@@ -787,8 +967,7 @@ function persistOrdersForDate(dateKey, entry) {
   if (!cache.raw.ordersByDate) cache.raw.ordersByDate = {};
   cache.raw.ordersByDate[dateKey] = entry;
 
-  const filePath = path.join(__dirname, 'scrape-result.json');
-  fs.writeFileSync(filePath, JSON.stringify(cache.raw, null, 2));
+  fs.writeFileSync(SCRAPE_RESULT_PATH, JSON.stringify(cache.raw, null, 2));
   loadData();
 }
 
@@ -824,8 +1003,7 @@ function persistCoreSnapshotFromCookie(coreData, sourceLabel = 'URL+cookie 同�
     updatedAt: cache.raw.timestamp,
   };
 
-  const filePath = path.join(__dirname, 'scrape-result.json');
-  fs.writeFileSync(filePath, JSON.stringify(cache.raw, null, 2));
+  fs.writeFileSync(SCRAPE_RESULT_PATH, JSON.stringify(cache.raw, null, 2));
   loadData();
   applyCacheSyncStateToScrapeStatus();
 }
@@ -1427,6 +1605,70 @@ app.get('/api/sales/summary', (req, res) => {
   });
 });
 
+app.get('/api/data-context', (req, res) => {
+  res.json(buildAnalyticsContextPayload());
+});
+
+app.get('/api/reports/daily/latest', async (req, res) => {
+  let bundle = readLatestDailyReportBundle();
+
+  if (!bundle && cache.hasLiveData) {
+    try {
+      bundle = await generateDailySalesReportBundle();
+    } catch (error) {
+      return res.status(500).json({
+        ok: false,
+        error: error.message || 'Failed to generate latest daily report',
+        state: dailyReportState,
+      });
+    }
+  }
+
+  if (!bundle) {
+    return res.status(404).json({
+      ok: false,
+      error: 'No daily report available yet',
+      state: dailyReportState,
+    });
+  }
+
+  res.json({
+    ok: true,
+    state: dailyReportState,
+    meta: bundle.meta,
+    report: bundle.report,
+  });
+});
+
+app.get('/api/reports/daily/status', (req, res) => {
+  res.json({
+    ok: true,
+    state: dailyReportState,
+    latest: readLatestDailyReportMeta(),
+  });
+});
+
+app.post('/api/reports/daily/generate', async (req, res) => {
+  try {
+    const result = await generateDailySalesReportBundle({
+      force: true,
+      mode: req.body?.mode || REPORT_AGENT_MODE,
+    });
+    res.json({
+      ok: true,
+      state: dailyReportState,
+      meta: result.meta,
+      report: result.report,
+    });
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: error.message || 'Failed to generate daily report',
+      state: dailyReportState,
+    });
+  }
+});
+
 app.get('/api/orders/recent', (req, res) => {
   res.json(cache.data.recentOrders);
 });
@@ -1736,10 +1978,103 @@ function applyCacheSyncStateToScrapeStatus() {
   if (sync.message) scrapeStatus.lastLog = sync.message;
 }
 
+function finalizeScrapeSuccess() {
+  scrapeStatus.running = false;
+  loadData();
+  applyCacheSyncStateToScrapeStatus();
+  scrapeStatus.lastLog = cache.syncState?.message || '✅ 数据更新成功！';
+  scrapeStatus.error = null;
+}
+
+function finalizeScrapeFailure(message) {
+  scrapeStatus.running = false;
+  scrapeStatus.lastLog = message || '❌ 爬虫失败';
+  scrapeStatus.error = message || 'Scraper failed';
+  scrapeStatus.phase = 'failed';
+}
+
+async function runScraperInline() {
+  try {
+    const result = await scrapeTapTouch();
+    if (result?.session?.cookieHeader) {
+      tapTouchSession = {
+        sid: result.session.sid || tapTouchSession?.sid || null,
+        cookies: result.session.cookies || [],
+        cookieHeader: result.session.cookieHeader,
+        createdAt: result.session.createdAt || new Date().toISOString(),
+      };
+      autoSyncState.cookieLastRefreshedAt = tapTouchSession.createdAt;
+      autoSyncState.dataLastFetchedAt = new Date().toISOString();
+      autoSyncState.lastError = null;
+    }
+    finalizeScrapeSuccess();
+  } catch (error) {
+    finalizeScrapeFailure(error.message || 'Inline scrape failed');
+  }
+}
+
+function runScraperChildProcess() {
+  const child = spawn('node', ['scraper.js'], { cwd: APP_ROOT, env: process.env });
+
+  child.stdout.on('data', d => {
+    const line = d.toString().trim().split('\n').pop();
+    console.log('[Scraper]', line);
+    scrapeStatus.lastLog = line;
+  });
+  child.stderr.on('data', d => {
+    const line = d.toString().trim().split('\n').pop();
+    if (line) scrapeStatus.lastLog = line;
+  });
+
+  child.on('close', code => {
+    if (code === 0) {
+      finalizeScrapeSuccess();
+    } else {
+      finalizeScrapeFailure(`❌ 失败 (exit ${code})`);
+    }
+  });
+}
+
 app.get('/api/scrape/status', (req, res) => res.json({
   ...scrapeStatus,
   dataReady:   cache.hasLiveData,
   lastUpdated: cache.lastUpdated,
+}));
+
+app.get('/api/healthz', (req, res) => res.json({
+  ok: true,
+  target: DEPLOY_TARGET,
+  uptimeSec: Math.round(process.uptime()),
+  hasSnapshot: fs.existsSync(SCRAPE_RESULT_PATH),
+  dataReady: cache.hasLiveData,
+}));
+
+app.get('/api/readyz', (req, res) => {
+  if (!cache.hasLiveData) {
+    return res.status(503).json({
+      ok: false,
+      ready: false,
+      reason: 'waiting_for_snapshot',
+      target: DEPLOY_TARGET,
+    });
+  }
+
+  res.json({
+    ok: true,
+    ready: true,
+    target: DEPLOY_TARGET,
+    lastUpdated: cache.lastUpdated,
+  });
+});
+
+app.get('/api/runtime', (req, res) => res.json({
+  deployTarget: DEPLOY_TARGET,
+  isServerless,
+  scraperExecutionMode: SCRAPER_EXECUTION_MODE,
+  enableBackgroundJobs: ENABLE_BACKGROUND_JOBS,
+  enableFileWatch: ENABLE_FILE_WATCH,
+  enableScraperApi: ENABLE_SCRAPER_API,
+  snapshotPath: SCRAPE_RESULT_PATH,
 }));
 
 app.get('/api/auto-sync/status', (req, res) => res.json({
@@ -1764,6 +2099,14 @@ app.post('/api/auto-sync/run', async (req, res) => {
 });
 
 app.post('/api/scrape/run', (req, res) => {
+  if (!ENABLE_SCRAPER_API) {
+    return res.status(501).json({
+      ok: false,
+      error: '当前运行模式已禁用本地爬虫入口。建议在独立 worker 或 Docker 容器中运行 scraper。',
+      deployTarget: DEPLOY_TARGET,
+    });
+  }
+
   if (scrapeStatus.running) {
     return res.json({ ok: false, message: '爬虫正在运行中，请稍候...' });
   }
@@ -1776,36 +2119,22 @@ app.post('/api/scrape/run', (req, res) => {
   });
   res.json({ ok: true, message: '已启动，约30秒后完成' });
 
-  const child = spawn('node', ['scraper.js'], { cwd: __dirname, env: process.env });
-
-  child.stdout.on('data', d => {
-    const line = d.toString().trim().split('\n').pop();
-    console.log('[Scraper]', line);
-    scrapeStatus.lastLog = line;
-  });
-  child.stderr.on('data', d => { scrapeStatus.lastLog = d.toString().trim().split('\n').pop(); });
-
-  child.on('close', code => {
-    scrapeStatus.running = false;
-    if (code === 0) {
-      loadData();
-      applyCacheSyncStateToScrapeStatus();
-      scrapeStatus.lastLog = cache.syncState?.message || '✅ 数据更新成功！';
-      scrapeStatus.error   = null;
-    } else {
-      scrapeStatus.lastLog = `❌ 失败 (exit ${code})`;
-      scrapeStatus.error   = `Exit code ${code}`;
-      scrapeStatus.phase   = 'failed';
-    }
-  });
+  if (SCRAPER_EXECUTION_MODE === 'inline') {
+    runScraperInline();
+  } else {
+    runScraperChildProcess();
+  }
 });
 
 // ============================================================
 // START
 // ============================================================
-const loaded = false;
+const loaded = loadData();
+if (loaded && AUTO_DAILY_REPORT_ENABLED) {
+  queueAutoDailyReportGeneration('startup');
+}
 
-if (AUTO_SYNC_ENABLED) {
+if (AUTO_SYNC_ENABLED && ENABLE_BACKGROUND_JOBS) {
   console.log('[Server] Auto sync enabled. Dashboard visit can trigger sync automatically.');
 
   setInterval(() => {
@@ -1821,17 +2150,21 @@ if (AUTO_SYNC_ENABLED) {
       console.error('[Server] Auto sync failed:', error.message);
     });
   }, AUTO_FETCH_MS);
+} else if (AUTO_SYNC_ENABLED && !ENABLE_BACKGROUND_JOBS) {
+  console.log(`[Server] Background jobs disabled for ${DEPLOY_TARGET} mode. Auto sync timers will not run in-process.`);
 } else {
   console.log('[Server] TapTouch auto sync disabled until TAPTOUCH_EMAIL and TAPTOUCH_PASSWORD are configured.');
 }
 
-// Auto-reload when scrape-result.json changes
-fs.watchFile(path.join(__dirname, 'scrape-result.json'), { interval: 3000 }, () => {
-  console.log('[Server] scrape-result.json changed — reloading...');
-  if (loadData()) {
-    applyCacheSyncStateToScrapeStatus();
-  }
-});
+if (ENABLE_FILE_WATCH) {
+  fs.watchFile(SCRAPE_RESULT_PATH, { interval: 3000 }, () => {
+    console.log('[Server] Snapshot changed — reloading...');
+    if (loadData()) {
+      applyCacheSyncStateToScrapeStatus();
+      queueAutoDailyReportGeneration('snapshot_reload');
+    }
+  });
+}
 
 app.listen(PORT, () => {
   console.log(`\n🍜  PROSPERITY XH Dashboard Server`);
