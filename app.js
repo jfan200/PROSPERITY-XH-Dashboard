@@ -4140,4 +4140,18 @@ async function init() {
   await autoSyncOnPageOpen();
 }
 
-document.addEventListener('DOMContentLoaded', init);
+let appBootstrapped = false;
+
+function bootApp() {
+  if (appBootstrapped) return;
+  appBootstrapped = true;
+  void init();
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', bootApp);
+} else {
+  bootApp();
+}
+
+window.addEventListener('legacy-shell-ready', bootApp);

@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -29,7 +28,7 @@ function copyLegacyAssets() {
 
 export default defineConfig({
   root: __dirname,
-  plugins: [react(), copyLegacyAssets()],
+  plugins: [copyLegacyAssets()],
   build: {
     outDir,
     emptyOutDir: true,

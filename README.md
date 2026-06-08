@@ -1,32 +1,55 @@
 # PROSPERITY XH Dashboard
 
-墨尔本 `食集-重庆小面 / PROSPERITY XH` 的店内运营仪表板。  
-项目会从 TapTouch Backoffice 抓取真实营业数据，在本地生成一个适合门店日常查看的 Dashboard。
+墨尔本 `食集-重庆小面 / PROSPERITY XH` 的店内运营看板。  
+项目会从 TapTouch Backoffice 抓取真实营业数据，在本地或 Docker 中提供桌面端、移动端、日报和摄像头查看能力。
 
-## 现在已经支持什么
+## 当前技术栈
 
-- 今日运营总览：销售额、订单数、客单价、高峰时段
-- 每小时销售图表：柱状图 / 折线图切换
-- 销售来源分析：支付方式占比
-- 本周历史分析：按 Mon-Sun 展示每天销售额、订单量、最佳营业日
-- 今日订单页：实时搜索、点击订单查看 Receipt 明细
-- Receipt 按需抓取：主同步先快，订单详情在需要时再抓并缓存
-- 摄像头实时画面：已接入 Xiaomi 云台版2K（通过 go2rtc `dining_room` 流）
-- 主题模式：支持跟随系统 / 夜间 / 白天切换
+- 前端: React + Vite
+- 页面运行逻辑: 现有 `app.js` / `mobile.js` 业务逻辑由 React shell 承接
+- 后端: Fastify
+- 图表: Chart.js
+- 抓取: Puppeteer Core
+- 数据源: TapTouch Backoffice
+
+## 当前功能
+
+- 今日运营总览: 销售额、订单数、客单价、高峰时段
+- 每小时销售图表: 柱状图 / 折线图切换
+- 销售来源分析: 支付方式占比
+- 本周历史分析: Mon-Sun 周维度营业表现
+- 今日订单页: 搜索、详情查看、Receipt 按需抓取
+- 商品分析: 排行、趋势、集中度、菜单工程
+- 每日日报: 自动生成 JSON + HTML 报告
+- 摄像头页: 通过 `go2rtc` 接入实时视频流
+- 桌面端 / 移动端双入口
 
 ## 项目结构
 
 ```text
-restaurant-dashboard/
-├── index.html
+PROSPERITY-XH-Dashboard/
+├── web/                     # React + Vite 入口与模板
+│   ├── index.html
+│   ├── mobile.html
+│   └── src/
+├── app.js                   # 桌面端现有业务逻辑
+├── mobile.js                # 移动端现有业务逻辑
 ├── style.css
-├── app.js
-├── server.js
-├── scraper.js
+├── mobile.css
+├── view-switch.js
+├── server.js                # Fastify 服务入口
+├── scraper.js               # TapTouch 抓取逻辑
+├── report-agent.js          # 每日日报生成
+├── runtime-config.js
+├── analytics-context.json
+├── go2rtc.yaml              # 摄像头流配置示例
+├── reports/                 # 已生成日报
+├── __tests__/
+├── Dockerfile
+├── docker-compose.yml
+├── docker-compose.hub.yml
+├── docker-build-push.sh
 ├── start.sh
-├── go2rtc.yaml
-├── package.json
-├── .env.example
 └── README.md
 ```
 
@@ -38,154 +61,144 @@ restaurant-dashboard/
 npm install
 ```
 
-### 2. 配置 TapTouch 账号（可选但推荐）
-
-先复制一份本地环境变量文件：
+### 2. 配置环境变量
 
 ```bash
 cp .env.example .env.local
 ```
 
-然后把 `.env.local` 里的示例账号和密码改成你自己的真实值：
+至少建议配置：
 
 ```bash
 TAPTOUCH_EMAIL=your-email@example.com
 TAPTOUCH_PASSWORD=your-password
 ```
 
-`.env.local` 已经被 `.gitignore` 忽略，不会被提交到 GitHub。
+如果本机 Chrome 路径无法自动识别，再补：
 
-> 只想先把页面跑起来时，可以暂时不填账号密码；后端会启动，TapTouch 自动同步会自动跳过。
+```bash
+TAPTOUCH_BROWSER_EXECUTABLE=/Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+```
 
-### 3. 一键启动
+### 3. 构建前端
+
+```bash
+npm run build
+```
+
+### 4. 启动服务
+
+```bash
+npm start
+```
+
+或直接一键启动：
 
 ```bash
 bash start.sh
 ```
 
-启动脚本会：
+默认地址：
 
-- 读取 `.env` / `.env.local`
-- 如果配置了 TapTouch 账号，会自动安装轻量爬虫依赖 `puppeteer-core`
-- 启动一个本地 Node 服务 `http://localhost:3001`
-- 自动打开浏览器
-
-现在 Dashboard 本身不依赖 npm 包即可启动；爬虫改为使用 `puppeteer-core`，不会再在 `npm install` 时下载一整份 Chromium。爬虫会优先使用你机器上已有的 Chrome/Chromium；如果脚本找不到浏览器，在 `.env.local` 里指定即可：
-
-```bash
-TAPTOUCH_BROWSER_EXECUTABLE=/Applications/Google Chrome.app/Contents/MacOS/Google Chrome
-# 或 Linux: TAPTOUCH_BROWSER_EXECUTABLE=/usr/bin/chromium
-```
+- 桌面端: `http://localhost:3001`
+- 移动端: `http://localhost:3001/mobile.html`
 
 ## 常用命令
 
 ```bash
-# 启动本地服务
+# 前端构建
+npm run build
+
+# 启动服务
 npm start
+
+# 本地一键启动
+bash start.sh
 
 # 单独运行一次 TapTouch 抓取
 npm run scrape
 
-# 检查 JS 语法
+# 语法检查
 npm run check
 
-# 一键启动（推荐日常使用）
-bash start.sh
+# 测试
+npm test
 ```
-
-## 同步机制
-
-### 更少服务器的推荐方式
-
-日常只需要 **1 台常开的机器** 跑 Node：
-
-- `server.js` 同时提供 Dashboard 页面、API、TapTouch 自动同步和按需 receipt 抓取
-- 店内屏幕、iPad、安卓点餐机只需要打开 `http://这台机器IP:3001`，不需要在每台设备上安装 Node 或爬虫依赖
-- 摄像头不是必须项；只有需要实时视频时才额外跑 `go2rtc`
-
-### 主同步
-
-点击右上角 `从 TapTouch 同步` 后，系统会先抓：
-
-1. Dashboard KPI
-2. 每小时销售图表
-3. 本周 Dashboard 数据
-4. 今日订单列表
-5. 本周订单列表
-
-这一阶段通常比旧版本更快，页面会先拿到核心营业数据。
-
-### 订单详情
-
-订单详情不再全量预抓。
-
-- 主同步默认只预热最近几笔 receipt，其余订单详情按需加载
-- 当你打开某一笔订单时，后端才会去 TapTouch 拉对应 Receipt
-- 拉到后会写入本地缓存
-- 同一笔订单下次再打开会更快
-
-## Receipt 明细
-
-TapTouch 的订单详情实际是 Receipt 页面，不是普通表格页。  
-当前版本已经针对 Receipt 做了解析，能提取：
-
-- 菜品名
-- 数量
-- 单价 / 小计
-- 加料或备注
-- GST
-- surcharge
-- payment method
-- total paid
-
-如果直接打开 receipt URL 失败，系统会自动回退到订单报表页里重新定位并进入该订单。
 
 ## API 概览
 
-本地服务默认跑在 `http://localhost:3001`。
+本地服务默认运行在 `http://localhost:3001`。
 
 | Method | Route | Description |
 |---|---|---|
 | `GET` | `/api/status` | 服务健康状态 |
+| `GET` | `/api/runtime` | 当前运行模式 |
+| `GET` | `/api/healthz` | 健康检查 |
+| `GET` | `/api/readyz` | 就绪检查 |
 | `GET` | `/api/sales/hourly` | 今日每小时销售额与订单数 |
 | `GET` | `/api/sales/summary` | 今日汇总 + 本周概览 |
 | `GET` | `/api/orders/recent` | 今日订单列表 |
-| `GET` | `/api/orders/detail/:txId` | 单笔订单 Receipt 明细 |
-| `GET` | `/api/orders/details` | 已缓存的订单详情 |
+| `GET` | `/api/orders/by-date` | 指定日期订单 |
+| `GET` | `/api/orders/detail/:key` | 单笔 Receipt 明细 |
+| `GET` | `/api/products/report` | 商品报表 |
+| `GET` | `/api/products/analysis` | 商品分析 |
+| `GET` | `/api/reports/daily/latest` | 最新日报 |
+| `POST` | `/api/reports/daily/generate` | 手动生成日报 |
 | `GET` | `/api/scrape/status` | 当前同步进度 |
-| `POST` | `/api/scrape/run` | 触发一次同步 |
+| `POST` | `/api/scrape/run` | 触发一次抓取 |
 
 ## 环境变量
 
 | 变量名 | 说明 | 默认值 |
 |---|---|---|
-| `PORT` | Dashboard 服务端口 | `3001` |
-| `TAPTOUCH_EMAIL` | TapTouch 登录邮箱；未配置时自动同步会跳过 | 无 |
-| `TAPTOUCH_PASSWORD` | TapTouch 登录密码；未配置时自动同步会跳过 | 无 |
-| `TAPTOUCH_BROWSER_EXECUTABLE` | Chrome/Chromium 路径；脚本自动找不到浏览器时再填 | 自动查找 |
-| `TAPTOUCH_AUTO_SYNC` | 是否开启后端定时自动同步 | `true` |
+| `PORT` | 服务端口 | `3001` |
+| `TAPTOUCH_EMAIL` | TapTouch 登录邮箱 | 无 |
+| `TAPTOUCH_PASSWORD` | TapTouch 登录密码 | 无 |
+| `TAPTOUCH_BROWSER_EXECUTABLE` | Chrome/Chromium 路径 | 自动查找 |
+| `TAPTOUCH_AUTO_SYNC` | 是否开启自动同步 | `true` |
 | `TAPTOUCH_AUTO_FETCH_MS` | 自动刷新核心数据间隔 | `300000` |
-| `TAPTOUCH_COOKIE_REFRESH_MS` | TapTouch 登录 cookie 刷新间隔 | `1800000` |
-| `TAPTOUCH_DETAIL_CONCURRENCY` | 全量详情预抓并发数 | `4` |
-| `TAPTOUCH_DETAIL_PREFETCH_WORKERS` | 后端按需/后台 receipt 抓取 worker 数 | `2` |
-| `TAPTOUCH_DETAIL_PRIME_COUNT` | 主同步后优先预热最近几笔 receipt | `8` |
-| `TAPTOUCH_DETAIL_SAVE_EVERY` | 详情抓取中间保存频率 | `10` |
-| `TAPTOUCH_PREFETCH_DETAILS` | 是否在主同步时预抓全部详情；服务器压力小建议保持 `false` | `false` |
+| `TAPTOUCH_COOKIE_REFRESH_MS` | Cookie 刷新间隔 | `1800000` |
+| `TAPTOUCH_DETAIL_CONCURRENCY` | 详情抓取并发数 | `4` |
+| `TAPTOUCH_DETAIL_PREFETCH_WORKERS` | 后台详情 worker 数 | `2` |
+| `TAPTOUCH_DETAIL_PRIME_COUNT` | 主同步后预热几笔订单详情 | `8` |
+| `TAPTOUCH_PREFETCH_DETAILS` | 是否主同步时预抓全部详情 | `false` |
+| `REPORT_AGENT_AUTO_GENERATE` | 是否自动生成日报 | `true` |
+| `DEPLOY_TARGET` | 运行环境标识 | `local` |
+| `DATA_DIR` | 运行数据目录 | `./data` |
 
-## 摄像头接入（已实测）
+## Docker
 
-当前 Dashboard 已接入一台 `Xiaomi 云台版2K`，流地址使用 go2rtc：
+### 本地构建运行
 
-```text
-http://localhost:1984/stream.html?src=dining_room
+```bash
+docker compose up -d --build
 ```
 
-前端配置位置（[app.js](/Users/jinhua/Desktop/restaurant-dashboard/app.js)）：
+### 使用 Docker Hub 镜像
 
-- `CONFIG.cameras[3].go2rtcUrl = "http://localhost:1984/stream.html?src=dining_room"`
-- `CONFIG.cameras[3].appOnly = false`
+```bash
+docker compose -f docker-compose.hub.yml up -d
+```
 
-go2rtc 推荐运行方式（示例）：
+### 推送镜像
+
+```bash
+export DOCKER_USERNAME=your-dockerhub-username
+export VERSION=latest
+./docker-build-push.sh
+```
+
+当前镜像会：
+
+- 安装运行依赖和前端构建依赖
+- 在镜像内执行 `npm run build`
+- 保留最终运行所需依赖
+
+## 摄像头接入
+
+项目保留了 `go2rtc.yaml` 作为配置示例，推荐把 `go2rtc` 作为独立进程或独立容器运行，不再把可执行二进制直接放在仓库里。
+
+示例：
 
 ```bash
 docker run -d --name go2rtc \
@@ -194,170 +207,26 @@ docker run -d --name go2rtc \
   alexxit/go2rtc:latest
 ```
 
-### Xiaomi 配置示例
-
-```yaml
-xiaomi:
-  "your_mi_id": "V1:your-token"
-
-streams:
-  dining_room:
-    - "xiaomi://your_mi_id:cn@192.168.88.137?did=YOUR_DID&model=chuangmi.camera.029a02&subtype=sd"
-```
-
-### 常见问题
-
-- `invalid port ":cn" after host`  
-  说明 URL 格式写错了（通常是 `xiaomi://...:cn` 的位置不对）。
-
-- `read udp ... i/o timeout`  
-  说明语法正确，但摄像头链路没回包。建议：
-  1. 先在米家 App 打开实时画面“唤醒”设备
-  2. 确认电脑、摄像头在同一局域网且关闭 AP 隔离
-  3. 重启 go2rtc 容器并重试 `dining_room` 流
-
-## 技术栈
-
-- Frontend: HTML + Vanilla JavaScript + CSS
-- Chart: Chart.js
-- Backend: Node.js（内置轻量 HTTP 路由，无需 Express/CORS 依赖）
-- Scraper: Puppeteer Core（复用系统 Chrome/Chromium，减少安装体积）
-- Data Source: TapTouch Backoffice
-
-## 框架建议
-
-当前项目是轻量架构（Vanilla JS + Node 内置 HTTP 服务），对于单店运营看板是可用且维护成本低的方案。
-现阶段不强制需要上 React/Vue 这类前端框架，除非你后续有这些需求：
-
-- 多角色、多页面复杂权限
-- 前端模块多人并行开发
-- 复杂状态管理和组件复用
-- 要做成 SaaS/多门店平台
-
-换句话说：你现在这版先稳定跑起来是正确路线。
-
-## Docker 部署
-
-现在推荐你直接用 **单容器 Docker** 部署，不再以 Vercel 为目标。
-
-这个项目之所以更适合 Docker，是因为它同时需要：
-
-- 常驻的 Node 服务
-- Chromium / Puppeteer 抓取 TapTouch
-- 定时同步
-- 本地快照缓存
-- 后续可能继续接 `go2rtc`、反向代理、健康检查
-
-### 1. 准备 Docker 环境变量
-
-先复制 Docker 专用模板：
+## 测试
 
 ```bash
-cp .env.docker.example .env.docker
+npm test
 ```
 
-然后把 TapTouch 账号改成真实值：
+当前仓库内主要覆盖：
 
-```bash
-TAPTOUCH_EMAIL=your-email@example.com
-TAPTOUCH_PASSWORD=your-password
-```
+- server helper 纯函数
+- Receipt 解析
+- 日报生成基础逻辑
 
-### 2. 构建并启动
+## 当前整理结果
 
-```bash
-docker compose up -d --build
-```
+本次已移除这些不再需要或不应该留在仓库中的文件：
 
-启动后默认访问：
+- 旧的静态入口 `index.html` / `mobile.html`
+- 旧 HTTP 承载层 `mini-express.js`
+- 独立移动端说明 `MOBILE.md`
+- 仓库内的 `go2rtc` 二进制
+- 未被引用的历史样例报告与截图
 
-```text
-http://localhost:3001
-```
-
-### 3. 查看状态
-
-```bash
-docker compose ps
-docker compose logs -f dashboard
-```
-
-健康检查接口：
-
-```bash
-curl http://localhost:3001/api/healthz
-curl http://localhost:3001/api/readyz
-curl http://localhost:3001/api/runtime
-```
-
-### 4. 数据持久化
-
-Docker Compose 默认会挂一个命名卷：
-
-- `dashboard-data:/app/data`
-
-里面会保存：
-
-- `scrape-result.json`
-- 调试截图 / 调试 HTML
-- 后续运行期缓存文件
-
-这意味着容器重建后，业务快照不会立刻丢掉。
-
-### 5. 停止与更新
-
-```bash
-docker compose down
-docker compose pull
-docker compose up -d --build
-```
-
-## 部署建议（生产）
-
-最省事的部署方式是 **1 个 Docker 容器 + 多个展示端**：
-
-1. **后端常开机器**
-   - 跑 `docker compose up -d`
-   - 容器里同时提供 Dashboard 页面、API、TapTouch 同步
-   - 定期备份 Docker volume 里的 `/app/data`
-
-2. **展示端（店内屏幕/安卓设备/iPad）**
-   - 只打开 Dashboard 页面
-   - 不安装 Node、不跑 Puppeteer、不跑爬虫
-
-3. **摄像头视频（可选）**
-   - 不看摄像头时不用部署 `go2rtc`
-   - 需要摄像头实时画面时，再单独跑一个 `go2rtc` 容器或宿主机进程
-
-### 建议组件
-
-- 主服务：当前这个 `dashboard` 容器
-- 反向代理：`nginx` 或 `caddy`（如果你后面要挂域名/HTTPS）
-- 视频服务：`go2rtc`（仅摄像头需要）
-- 日志与备份：备份 Docker volume 中的 `/app/data`
-
-### 安卓点餐机是否可部署
-
-可以作为**展示端**使用，不建议作为后端主机。  
-原因是 Puppeteer 抓取与视频流转发在安卓设备上稳定性较差，容易影响点餐机本身业务。
-
-推荐方式：
-
-- 后端跑在店内常开主机 / NAS / 云服务器的 Docker 里
-- 安卓点餐机开启 kiosk 模式，仅访问 Dashboard URL
-
-## 注意事项
-
-- 这个项目默认是本地自用，不是多租户 SaaS
-- `data/`、`server.log`、`debug-*`、`.env.docker` 都不会提交到仓库
-- 如果同步失败，先检查 `.env.local`、TapTouch 登录状态和网络
-- 如果 3001 端口被占用，可以设置 `PORT=3002` 后再启动，或先运行 `pkill -f 'node server.js'`
-
-## 下一步可继续做
-
-- 增加按时间范围的历史报表
-- 增加商品维度、来源维度、时段维度的更细分析
-- 给订单详情增加“已缓存 / 加载中”状态提示
-- 增加多路摄像头自动健康检查与断流重连提示
-- 增加 `go2rtc` 的 Docker Compose 联动
-- 如果后面门店变多，再把 scraper 拆成独立 worker 容器
+现在仓库只保留当前运行链路和仍然有参考价值的配置、代码与日报文件。

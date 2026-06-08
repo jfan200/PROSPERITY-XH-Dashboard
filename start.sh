@@ -44,13 +44,15 @@ done
 
 PORT="${PORT:-3001}"
 
-# Dashboard 本身不再依赖 npm 包；TapTouch 爬虫才需要 puppeteer-core。
-# 如果配置了账号但还没有安装爬虫依赖，尝试安装；失败也不阻止 Dashboard 先跑起来。
-if has_real_taptouch_creds && [ ! -d "node_modules/puppeteer-core" ]; then
-  echo "📦 安装 TapTouch 爬虫依赖中（不会下载内置 Chromium）..."
-  if ! npm install; then
-    echo "⚠️  npm install 失败。Dashboard 会继续启动；TapTouch 同步需稍后手动执行 npm install 修复。"
-  fi
+# Fastify + React 版本需要先装依赖和前端构建产物。
+if [ ! -d "node_modules" ]; then
+  echo "📦 安装依赖中..."
+  npm install
+fi
+
+if [ ! -f "dist/index.html" ]; then
+  echo "🛠️  构建前端资源中..."
+  npm run build
 fi
 
 # 给爬虫一个清晰的 Chrome 提示；不阻止只看 Dashboard。

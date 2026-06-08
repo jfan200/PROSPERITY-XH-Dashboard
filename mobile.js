@@ -1623,8 +1623,21 @@ async function init() {
   console.log('[Mobile] Initialized');
 }
 
-// Start the app
-document.addEventListener('DOMContentLoaded', init);
+let mobileBootstrapped = false;
+
+function bootMobileApp() {
+  if (mobileBootstrapped) return;
+  mobileBootstrapped = true;
+  void init();
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', bootMobileApp);
+} else {
+  bootMobileApp();
+}
+
+window.addEventListener('legacy-shell-ready', bootMobileApp);
 
 // Handle back button for modal
 window.addEventListener('popstate', () => {
