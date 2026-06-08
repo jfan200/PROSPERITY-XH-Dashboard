@@ -1,0 +1,381 @@
+  <!-- ===== HEADER ===== -->
+  <header class="mobile-header">
+    <div class="header-left">
+      <span class="header-logo">🍜</span>
+      <div class="header-info">
+        <h1 class="header-title">PROSPERITY XH</h1>
+        <span class="header-subtitle" id="header-time">--:--</span>
+      </div>
+    </div>
+    <div class="header-right">
+      <button class="header-btn" onclick="switchToDesktop()" title="切换桌面版">
+        <span>🖥️</span>
+      </button>
+      <button class="header-btn" onclick="toggleTheme()" title="切换主题">
+        <span id="theme-icon">☀️</span>
+      </button>
+      <button class="header-btn sync-btn" onclick="syncData()" title="同步数据">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+          <polyline points="21 3 21 9 15 9" />
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- ===== MAIN CONTENT ===== -->
+  <main class="mobile-main">
+    <!-- Page: Dashboard -->
+    <section class="page active" id="page-dashboard">
+      <!-- Sync Status Banner -->
+      <div class="sync-banner" id="sync-banner">
+        <div class="sync-banner-icon">📊</div>
+        <div class="sync-banner-text">
+          <div class="sync-banner-title">等待数据同步</div>
+          <div class="sync-banner-sub">点击右上角同步按钮获取最新数据</div>
+        </div>
+      </div>
+
+      <!-- KPI Cards -->
+      <div class="kpi-grid">
+        <div class="kpi-card kpi-revenue">
+          <div class="kpi-icon">💰</div>
+          <div class="kpi-content">
+            <div class="kpi-label">今日销售额</div>
+            <div class="kpi-value" id="kpi-revenue">$0.00</div>
+            <div class="kpi-change positive" id="kpi-revenue-change">+0%</div>
+          </div>
+        </div>
+        <div class="kpi-card kpi-orders">
+          <div class="kpi-icon">📋</div>
+          <div class="kpi-content">
+            <div class="kpi-label">今日订单</div>
+            <div class="kpi-value" id="kpi-orders">0 单</div>
+            <div class="kpi-change positive" id="kpi-orders-change">+0%</div>
+          </div>
+        </div>
+        <div class="kpi-card kpi-avg">
+          <div class="kpi-icon">📊</div>
+          <div class="kpi-content">
+            <div class="kpi-label">平均客单价</div>
+            <div class="kpi-value" id="kpi-avg">$0.00</div>
+            <div class="kpi-change neutral" id="kpi-avg-change">+0%</div>
+          </div>
+        </div>
+        <div class="kpi-card kpi-peak">
+          <div class="kpi-icon">🔥</div>
+          <div class="kpi-content">
+            <div class="kpi-label">高峰时段</div>
+            <div class="kpi-value kpi-value-sm" id="kpi-peak">--:--</div>
+            <div class="kpi-change neutral" id="kpi-peak-rev">$0</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Hourly Chart -->
+      <div class="card">
+        <div class="card-header">
+          <h2 class="card-title">每小时销售</h2>
+          <div class="card-actions">
+            <button class="tab-btn active" onclick="switchChartType('bar', this)">柱状</button>
+            <button class="tab-btn" onclick="switchChartType('line', this)">折线</button>
+          </div>
+        </div>
+        <div class="chart-container">
+          <canvas id="hourly-chart"></canvas>
+        </div>
+      </div>
+
+      <!-- Weekly Overview -->
+      <div class="card">
+        <div class="card-header">
+          <h2 class="card-title">本周概览</h2>
+          <span class="card-badge" id="week-range">--</span>
+        </div>
+        <div class="weekly-stats">
+          <div class="weekly-stat">
+            <div class="weekly-stat-label">本周累计</div>
+            <div class="weekly-stat-value" id="weekly-revenue">$0</div>
+          </div>
+          <div class="weekly-stat">
+            <div class="weekly-stat-label">营业天数</div>
+            <div class="weekly-stat-value" id="weekly-days">0 天</div>
+          </div>
+          <div class="weekly-stat">
+            <div class="weekly-stat-label">最佳营业日</div>
+            <div class="weekly-stat-value" id="weekly-best">--</div>
+          </div>
+        </div>
+        <div class="weekly-chart-container">
+          <canvas id="weekly-chart"></canvas>
+        </div>
+      </div>
+
+      <!-- Recent Orders -->
+      <div class="card">
+        <div class="card-header">
+          <h2 class="card-title">最近订单</h2>
+          <button class="card-link" onclick="showPage('orders')">查看全部 →</button>
+        </div>
+        <div class="orders-list" id="recent-orders">
+          <div class="empty-state">
+            <div class="empty-icon">🧾</div>
+            <div class="empty-text">暂无订单数据</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Top Items -->
+      <div class="card">
+        <div class="card-header">
+          <h2 class="card-title">🔥 热销菜品</h2>
+          <button class="card-link" onclick="showPage('products')">查看详情 →</button>
+        </div>
+        <div class="top-items-list" id="top-items">
+          <div class="empty-state">
+            <div class="empty-icon">🍜</div>
+            <div class="empty-text">同步数据后显示</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h2 class="card-title">更多工具</h2>
+          <button class="card-link" onclick="showPage('more')">进入 →</button>
+        </div>
+        <div class="quick-actions">
+          <button class="quick-action-btn" onclick="showPage('more')">查看每日日报</button>
+          <button class="quick-action-btn" onclick="showPage('products')">查看商品分析</button>
+          <button class="quick-action-btn" onclick="switchToDesktop()">切换桌面版</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Page: Orders -->
+    <section class="page" id="page-orders">
+      <div class="page-header">
+        <h2 class="page-title">订单管理</h2>
+        <div class="page-actions">
+          <button class="icon-btn" onclick="showPage('dashboard')">← 返回</button>
+        </div>
+      </div>
+
+      <!-- Date Picker -->
+      <div class="date-picker">
+        <button class="date-nav" id="orders-date-prev" onclick="navDate(-1)">‹</button>
+        <button class="date-display" type="button" onclick="openDatePicker()">
+          <input type="date" id="order-date" class="date-input" onchange="changeDate(this.value)">
+          <span class="date-label" id="date-label">今天</span>
+        </button>
+        <button class="date-nav" id="orders-date-next" onclick="navDate(1)">›</button>
+        <button class="date-today" id="date-today" onclick="goToday()">今天</button>
+      </div>
+
+      <!-- Search -->
+      <div class="search-box">
+        <span class="search-icon">🔍</span>
+        <input type="text" class="search-input" placeholder="搜索订单号、金额..." oninput="searchOrders(this.value)">
+      </div>
+
+      <div class="orders-meta" id="orders-meta">
+        <span class="orders-meta-pill">加载中...</span>
+      </div>
+
+      <!-- Orders List -->
+      <div class="orders-list full-list" id="orders-list">
+        <div class="empty-state">
+          <div class="empty-icon">📋</div>
+          <div class="empty-text">加载订单中...</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Page: Products -->
+    <section class="page" id="page-products">
+      <div class="page-header">
+        <h2 class="page-title">热销菜品</h2>
+        <div class="page-actions">
+          <button class="icon-btn" onclick="switchToDesktop()">桌面完整版</button>
+        </div>
+      </div>
+
+      <div class="products-content">
+        <div class="card">
+          <div class="card-header">
+            <h3 class="card-title">分析周期</h3>
+            <div class="card-actions">
+              <button class="tab-btn active" id="products-mode-today" onclick="setProductsMode('today', this)">今天</button>
+              <button class="tab-btn" id="products-mode-week" onclick="setProductsMode('week', this)">本周</button>
+            </div>
+          </div>
+          <div class="products-kpi-grid" id="products-kpis">
+            <div class="empty-state">
+              <div class="empty-text">加载商品分析中...</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h3 class="card-title">商品排行</h3>
+            <span class="card-badge" id="products-period-label">今天</span>
+          </div>
+          <div class="top-items-list" id="products-ranking">
+            <div class="empty-state">
+              <div class="empty-icon">📊</div>
+              <div class="empty-text">加载商品分析中...</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h3 class="card-title">经营提示</h3>
+          </div>
+          <div class="insight-list" id="products-insights">
+            <div class="empty-state">
+              <div class="empty-text">等待分析结果...</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Page: Cameras -->
+    <section class="page" id="page-cameras">
+      <div class="page-header">
+        <h2 class="page-title">摄像头</h2>
+        <div class="page-actions">
+          <button class="icon-btn" onclick="showPage('dashboard')">← 返回</button>
+        </div>
+      </div>
+
+      <div class="cameras-grid" id="cameras-grid">
+        <div class="empty-state">
+          <div class="empty-icon">📷</div>
+          <div class="empty-text">暂无摄像头配置</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="page" id="page-more">
+      <div class="page-header">
+        <h2 class="page-title">更多功能</h2>
+        <div class="page-actions">
+          <button class="icon-btn" onclick="switchToDesktop()">桌面版</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h3 class="card-title">每日日报</h3>
+          <button class="card-link" onclick="generateDailyReport()">立即生成</button>
+        </div>
+        <div class="report-brief" id="report-brief">
+          <div class="empty-state">
+            <div class="empty-icon">📝</div>
+            <div class="empty-text">正在加载日报状态...</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h3 class="card-title">数据语义</h3>
+          <button class="card-link" onclick="refreshMorePage()">刷新</button>
+        </div>
+        <div class="context-brief" id="context-brief">
+          <div class="empty-state">
+            <div class="empty-icon">🧠</div>
+            <div class="empty-text">正在读取数据上下文...</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ===== BOTTOM NAVIGATION ===== -->
+  <nav class="bottom-nav">
+    <button class="nav-item active" onclick="showPage('dashboard')" data-page="dashboard">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="3" y="3" width="7" height="7" rx="1" />
+        <rect x="14" y="3" width="7" height="7" rx="1" />
+        <rect x="3" y="14" width="7" height="7" rx="1" />
+        <rect x="14" y="14" width="7" height="7" rx="1" />
+      </svg>
+      <span>首页</span>
+    </button>
+    <button class="nav-item" onclick="showPage('orders')" data-page="orders">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+        <polyline points="14 2 14 8 20 8" />
+        <line x1="16" y1="13" x2="8" y2="13" />
+        <line x1="16" y1="17" x2="8" y2="17" />
+      </svg>
+      <span>订单</span>
+    </button>
+    <button class="nav-item" onclick="showPage('products')" data-page="products">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <line x1="18" y1="20" x2="18" y2="10" />
+        <line x1="12" y1="20" x2="12" y2="4" />
+        <line x1="6" y1="20" x2="6" y2="14" />
+      </svg>
+      <span>菜品</span>
+    </button>
+    <button class="nav-item" onclick="showPage('cameras')" data-page="cameras">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+        <circle cx="12" cy="13" r="4" />
+      </svg>
+      <span>摄像头</span>
+    </button>
+    <button class="nav-item" onclick="showPage('more')" data-page="more">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="5" cy="12" r="1.5" />
+        <circle cx="12" cy="12" r="1.5" />
+        <circle cx="19" cy="12" r="1.5" />
+      </svg>
+      <span>更多</span>
+    </button>
+  </nav>
+
+  <!-- ===== ORDER DETAIL MODAL ===== -->
+  <div class="modal" id="order-modal">
+    <div class="modal-header">
+      <button class="modal-back" onclick="closeModal()">← 返回</button>
+      <h3 class="modal-title" id="modal-title">订单详情</h3>
+      <div class="modal-actions">
+        <button class="modal-action" onclick="printOrder()">🖨️</button>
+      </div>
+    </div>
+    <div class="modal-content" id="modal-content">
+      <div class="loading-state">
+        <div class="loading-spinner"></div>
+        <div class="loading-text">加载中...</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal camera-modal" id="camera-modal">
+    <div class="modal-header">
+      <button class="modal-back" onclick="closeCameraModal()">← 返回</button>
+      <h3 class="modal-title" id="camera-modal-title">摄像头</h3>
+      <div class="modal-actions">
+        <button class="modal-action" id="camera-modal-open-btn" onclick="openCameraExternal()" title="新窗口打开">↗</button>
+      </div>
+    </div>
+    <div class="modal-content camera-modal-content" id="camera-modal-content">
+      <div class="loading-state">
+        <div class="loading-spinner"></div>
+        <div class="loading-text">加载画面中...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== TOAST NOTIFICATION ===== -->
+  <div class="toast" id="toast">
+    <div class="toast-icon" id="toast-icon">✓</div>
+    <div class="toast-message" id="toast-message">操作成功</div>
+  </div>
+

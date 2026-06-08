@@ -5,9 +5,11 @@
  */
 'use strict';
 
-const express  = require('./mini-express');
-const path     = require('path');
-const fs       = require('fs');
+const Fastify = require('fastify');
+const fastifyCors = require('@fastify/cors');
+const fastifyStatic = require('@fastify/static');
+const path = require('path');
+const fs = require('fs');
 const { spawn } = require('child_process');
 const { createDailySalesReport, persistDailySalesReport } = require('./report-agent');
 const {
@@ -36,7 +38,75 @@ const {
   ensureRuntimeDirectories,
 } = require('./runtime-config');
 
-const app  = express();
+const STATIC_ROOT = fs.existsSync(path.join(APP_ROOT, 'dist', 'index.html'))
+  ? path.join(APP_ROOT, 'dist')
+  : APP_ROOT;
+
+function enhanceReply(reply) {
+  reply.status = function status(code) {
+    reply.code(code);
+    return reply;
+  };
+
+  reply.json = function json(payload) {
+    reply.header('Content-Type', 'application/json; charset=utf-8');
+    return reply.send(payload);
+  };
+
+  reply.sendStatus = function sendStatus(code) {
+    reply.code(code);
+    return reply.send(code);
+  };
+
+  return reply;
+}
+
+function createLegacyAppAdapter(server, readyPromise) {
+  const wrap = handler => async (request, reply) => handler(request, enhanceReply(reply));
+
+  return {
+    get(route, handler) {
+      server.get(route, wrap(handler));
+    },
+    post(route, handler) {
+      server.post(route, wrap(handler));
+    },
+    listen(port, callback) {
+      return readyPromise
+        .then(() => server.listen({ port, host: '0.0.0.0' }))
+        .then(() => {
+          if (typeof callback === 'function') callback();
+        });
+    },
+  };
+}
+
+async function configureFastify(server) {
+  await server.register(fastifyCors, {
+    origin: true,
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type'],
+  });
+
+  server.addHook('onSend', async (request, reply, payload) => {
+    reply.header('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    reply.header('Pragma', 'no-cache');
+    reply.header('Expires', '0');
+    return payload;
+  });
+
+  await server.register(fastifyStatic, {
+    root: STATIC_ROOT,
+    prefix: '/',
+  });
+}
+
+const fastify = Fastify({
+  logger: false,
+  bodyLimit: 10 * 1024 * 1024,
+});
+const fastifyReady = configureFastify(fastify);
+const app = createLegacyAppAdapter(fastify, fastifyReady);
 const PORT = Number(process.env.PORT || 3001);
 const COOKIE_REFRESH_MS = Math.max(5 * 60 * 1000, Number(process.env.TAPTOUCH_COOKIE_REFRESH_MS || 30 * 60 * 1000));
 const AUTO_FETCH_MS = Math.max(60 * 1000, Number(process.env.TAPTOUCH_AUTO_FETCH_MS || 5 * 60 * 1000));
@@ -61,25 +131,6 @@ const AUTO_SYNC_ENABLED = /^(1|true|yes)$/i.test(process.env.TAPTOUCH_AUTO_SYNC 
   && hasConfiguredTapTouchCredentials();
 
 ensureRuntimeDirectories();
-
-app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  if (req.method === 'OPTIONS') return res.sendStatus(204);
-  next();
-});
-app.use(express.json());
-
-// Disable caching for development
-app.use((req, res, next) => {
-  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-  res.setHeader('Pragma', 'no-cache');
-  res.setHeader('Expires', '0');
-  next();
-});
-
-app.use(express.static(APP_ROOT));
 
 // ============================================================
 // PARSE REAL TAPTOUCH DATA FROM cached snapshot

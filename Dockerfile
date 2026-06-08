@@ -16,10 +16,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV CHROME_BIN=/usr/bin/chromium
 
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+RUN npm ci
 
 COPY . .
 
+RUN npm run build && npm prune --omit=dev
 RUN mkdir -p /app/data /app/data/debug
 
 EXPOSE 3001

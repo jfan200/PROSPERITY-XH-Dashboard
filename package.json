@@ -4,9 +4,11 @@
   "description": "TapTouch-powered restaurant operations dashboard for PROSPERITY XH",
   "main": "server.js",
   "scripts": {
+    "build": "vite build --config web/vite.config.mjs",
+    "dev:client": "vite --config web/vite.config.mjs",
     "start": "node server.js",
     "scrape": "node scraper.js",
-    "check": "node --check server.js && node --check scraper.js && node --check app.js && node --check browser.js && node --check mini-express.js && node --check runtime-config.js",
+    "check": "node --check server.js && node --check scraper.js && node --check app.js && node --check mobile.js && node --check browser.js && node --check runtime-config.js",
     "test": "node __tests__/run-tests.js",
     "test:jest": "jest",
     "test:coverage": "jest --coverage"
@@ -15,9 +17,16 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@fastify/cors": "^11.1.0",
+    "@fastify/static": "^8.3.0",
+    "fastify": "^5.6.1",
     "puppeteer-core": "^25.1.0"
   },
   "devDependencies": {
-    "jest": "^30.4.2"
+    "@vitejs/plugin-react": "^5.1.0",
+    "jest": "^30.4.2",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "vite": "^7.1.10"
   }
 }
