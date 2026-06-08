@@ -145,10 +145,15 @@ function buildRuleNarrative(report) {
     '热销主食仍然有稳定拉动作用，说明问题更像是结构性变薄，而不是核心招牌失灵。',
   ];
 
-  const caveats = [
-    '今天仍是营业中快照，不是收档后的全天最终结果。',
-    '当前 low-profit 判断只能按低销售贡献近似，因为成本字段仍是 0。',
-  ];
+  const caveats = report?.lifecycle?.stage === 'final'
+    ? [
+      '这份报告已经按打烊后的最终口径生成，可直接用于复盘或发给老板。',
+      '当前 low-profit 判断只能按低销售贡献近似，因为成本字段仍是 0。',
+    ]
+    : [
+      '今天仍是营业中快照，不是收档后的全天最终结果。',
+      '当前 low-profit 判断只能按低销售贡献近似，因为成本字段仍是 0。',
+    ];
 
   return {
     executiveSummary: buildExecutiveSummary(report),
@@ -478,6 +483,11 @@ async function createDailySalesReport(context, options = {}) {
     dateKey,
     generatedAt: new Date().toISOString(),
     generatedBy: 'PROSPERITY-XH report-agent',
+    lifecycle: {
+      stage: String(options.stage || 'snapshot').trim().toLowerCase() === 'final' ? 'final' : 'snapshot',
+      trigger: String(options.trigger || 'manual').trim() || 'manual',
+      storeState: String(options.storeState || '').trim() || null,
+    },
     today: todayTotals,
     yesterday: {
       dateKey: shiftDateKey(dateKey, -1),
@@ -558,15 +568,52 @@ function persistDailySalesReport(report, reportsDir) {
   const dailyDir = path.join(reportsDir, 'daily', report.dateKey);
   fs.mkdirSync(dailyDir, { recursive: true });
 
-  const jsonPath = path.join(dailyDir, 'report.json');
-  const htmlPath = path.join(dailyDir, 'report.html');
+  const stage = report?.lifecycle?.stage === 'final' ? 'final' : 'snapshot';
+  const stageSuffix = stage === 'final' ? '.final' : '.snapshot';
+  const jsonPath = path.join(dailyDir, `report${stageSuffix}.json`);
+  const htmlPath = path.join(dailyDir, `report${stageSuffix}.html`);
+  const latestAliasJsonPath = path.join(dailyDir, 'report.json');
+  const latestAliasHtmlPath = path.join(dailyDir, 'report.html');
+  const indexPath = path.join(dailyDir, 'meta.json');
   const latestJsonPath = path.join(reportsDir, 'daily', 'latest.json');
 
   fs.writeFileSync(jsonPath, JSON.stringify(report, null, 2));
   fs.writeFileSync(htmlPath, report.html, 'utf8');
+  fs.writeFileSync(latestAliasJsonPath, JSON.stringify(report, null, 2));
+  fs.writeFileSync(latestAliasHtmlPath, report.html, 'utf8');
+
+  let previousIndex = {};
+  if (fs.existsSync(indexPath)) {
+    try {
+      previousIndex = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
+    } catch {
+      previousIndex = {};
+    }
+  }
+
+  const indexPayload = {
+    dateKey: report.dateKey,
+    latestStage: stage,
+    latestGeneratedAt: report.generatedAt,
+    latestJsonPath: `/reports/daily/${report.dateKey}/report.json`,
+    latestHtmlPath: `/reports/daily/${report.dateKey}/report.html`,
+    agentMode: report.agent.mode,
+    snapshot: previousIndex.snapshot || null,
+    final: previousIndex.final || null,
+  };
+
+  indexPayload[stage] = {
+    generatedAt: report.generatedAt,
+    jsonPath: `/reports/daily/${report.dateKey}/report${stageSuffix}.json`,
+    htmlPath: `/reports/daily/${report.dateKey}/report${stageSuffix}.html`,
+    agentMode: report.agent.mode,
+  };
+  fs.writeFileSync(indexPath, JSON.stringify(indexPayload, null, 2));
+
   fs.writeFileSync(latestJsonPath, JSON.stringify({
     dateKey: report.dateKey,
     generatedAt: report.generatedAt,
+    stage,
     jsonPath: `/reports/daily/${report.dateKey}/report.json`,
     htmlPath: `/reports/daily/${report.dateKey}/report.html`,
     agentMode: report.agent.mode,
@@ -575,9 +622,12 @@ function persistDailySalesReport(report, reportsDir) {
   return {
     dateKey: report.dateKey,
     generatedAt: report.generatedAt,
+    stage,
     jsonPath: `/reports/daily/${report.dateKey}/report.json`,
     htmlPath: `/reports/daily/${report.dateKey}/report.html`,
     agentMode: report.agent.mode,
+    variantJsonPath: `/reports/daily/${report.dateKey}/report${stageSuffix}.json`,
+    variantHtmlPath: `/reports/daily/${report.dateKey}/report${stageSuffix}.html`,
   };
 }
 

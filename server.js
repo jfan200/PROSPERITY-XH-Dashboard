@@ -115,6 +115,12 @@ const ANALYTICS_CONTEXT_PATH = path.join(APP_ROOT, 'analytics-context.json');
 const REPORT_AGENT_MODE = String(process.env.REPORT_AGENT_MODE || 'rules').trim().toLowerCase();
 const REPORT_AGENT_OPENAI_MODEL = String(process.env.REPORT_AGENT_OPENAI_MODEL || 'gpt-4.1-mini').trim();
 const AUTO_DAILY_REPORT_ENABLED = /^(1|true|yes)$/i.test(process.env.REPORT_AGENT_AUTO_GENERATE || 'true');
+const REPORT_AGENT_TIMEZONE = String(process.env.REPORT_AGENT_TIMEZONE || 'Australia/Melbourne').trim() || 'Australia/Melbourne';
+const REPORT_AGENT_OPEN_HOUR = Number(process.env.REPORT_AGENT_OPEN_HOUR || 10);
+const REPORT_AGENT_CLOSE_HOUR = Number(process.env.REPORT_AGENT_CLOSE_HOUR || 22);
+const REPORT_AGENT_SNAPSHOT_INTERVAL_MS = Math.max(30 * 60 * 1000, Number(process.env.REPORT_AGENT_SNAPSHOT_INTERVAL_MS || 2 * 60 * 60 * 1000));
+const REPORT_AGENT_SCHEDULER_TICK_MS = Math.max(60 * 1000, Number(process.env.REPORT_AGENT_SCHEDULER_TICK_MS || 5 * 60 * 1000));
+const REPORT_AGENT_HISTORY_DAYS = Math.max(3, Number(process.env.REPORT_AGENT_HISTORY_DAYS || 7));
 
 function hasConfiguredTapTouchCredentials() {
   const email = String(process.env.TAPTOUCH_EMAIL || '').trim();
@@ -835,8 +841,13 @@ const dailyReportState = {
   lastGeneratedAt: null,
   lastDateKey: null,
   lastHtmlPath: null,
+  lastStage: null,
   agentMode: REPORT_AGENT_MODE,
   lastError: null,
+  nextScheduledAt: null,
+  latestAvailableDateKey: null,
+  latestAvailableStage: null,
+  historyDays: REPORT_AGENT_HISTORY_DAYS,
 };
 
 function findOrderInRaw(raw, key) {
@@ -916,6 +927,123 @@ function readLatestDailyReportMeta() {
   }
 }
 
+function readDailyReportIndex(dateKey) {
+  const metaPath = path.join(REPORTS_DIR, 'daily', dateKey, 'meta.json');
+  if (!fs.existsSync(metaPath)) return null;
+
+  try {
+    return JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+  } catch (error) {
+    return null;
+  }
+}
+
+function getReportPathFromMeta(meta, key) {
+  const relativePath = String(meta?.[key] || '').replace(/^\//, '');
+  return relativePath ? path.join(APP_ROOT, relativePath) : '';
+}
+
+function buildDailyReportHistory(limit = REPORT_AGENT_HISTORY_DAYS) {
+  const dailyRoot = path.join(REPORTS_DIR, 'daily');
+  if (!fs.existsSync(dailyRoot)) return [];
+
+  return fs.readdirSync(dailyRoot)
+    .filter(entry => /^\d{4}-\d{2}-\d{2}$/.test(entry))
+    .sort((left, right) => right.localeCompare(left))
+    .slice(0, Math.max(1, Number(limit) || REPORT_AGENT_HISTORY_DAYS))
+    .map(dateKey => {
+      const meta = readDailyReportIndex(dateKey);
+      const legacyJsonPath = path.join(dailyRoot, dateKey, 'report.json');
+      let legacyReport = null;
+      if (!meta && fs.existsSync(legacyJsonPath)) {
+        try {
+          legacyReport = JSON.parse(fs.readFileSync(legacyJsonPath, 'utf8'));
+        } catch {
+          legacyReport = null;
+        }
+      }
+
+      const fallbackStage = fs.existsSync(path.join(dailyRoot, dateKey, 'report.final.json'))
+        ? 'final'
+        : (legacyReport?.lifecycle?.stage || 'snapshot');
+      const stage = meta?.latestStage || fallbackStage;
+      const variant = meta?.[stage] || null;
+      const htmlPath = variant?.htmlPath
+        || (fs.existsSync(path.join(dailyRoot, dateKey, 'report.final.html'))
+          ? `/reports/daily/${dateKey}/report.final.html`
+          : `/reports/daily/${dateKey}/report.html`);
+
+      return {
+        dateKey,
+        stage,
+        generatedAt: variant?.generatedAt || meta?.latestGeneratedAt || legacyReport?.generatedAt || null,
+        htmlPath,
+        agentMode: variant?.agentMode || meta?.agentMode || legacyReport?.agent?.mode || REPORT_AGENT_MODE,
+        hasFinal: !!meta?.final || fs.existsSync(path.join(dailyRoot, dateKey, 'report.final.json')),
+        hasSnapshot: !!meta?.snapshot || fs.existsSync(path.join(dailyRoot, dateKey, 'report.snapshot.json')) || (!!legacyReport && !fs.existsSync(path.join(dailyRoot, dateKey, 'report.final.json'))),
+      };
+    });
+}
+
+function cleanupOldDailyReports(maxDays = REPORT_AGENT_HISTORY_DAYS) {
+  const dailyRoot = path.join(REPORTS_DIR, 'daily');
+  if (!fs.existsSync(dailyRoot)) return;
+
+  const datedEntries = fs.readdirSync(dailyRoot)
+    .filter(entry => /^\d{4}-\d{2}-\d{2}$/.test(entry))
+    .sort((left, right) => right.localeCompare(left));
+
+  datedEntries.slice(Math.max(1, Number(maxDays) || REPORT_AGENT_HISTORY_DAYS)).forEach(dateKey => {
+    fs.rmSync(path.join(dailyRoot, dateKey), { recursive: true, force: true });
+  });
+}
+
+function getReportClock(referenceDate = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: REPORT_AGENT_TIMEZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(referenceDate);
+
+  const lookup = type => parts.find(part => part.type === type)?.value || '';
+  const year = lookup('year');
+  const month = lookup('month');
+  const day = lookup('day');
+  const hour = Number(lookup('hour') || 0);
+  const minute = Number(lookup('minute') || 0);
+  const second = Number(lookup('second') || 0);
+
+  return {
+    dateKey: `${year}-${month}-${day}`,
+    hour,
+    minute,
+    second,
+    isoLocal: `${year}-${month}-${day}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:${String(second).padStart(2, '0')}`,
+  };
+}
+
+function isReportStoreOpen(clock = getReportClock()) {
+  return clock.hour >= REPORT_AGENT_OPEN_HOUR && clock.hour < REPORT_AGENT_CLOSE_HOUR;
+}
+
+function buildNextSnapshotDueAt(isoString) {
+  const timestamp = Date.parse(isoString);
+  if (!Number.isFinite(timestamp)) return null;
+  return new Date(timestamp + REPORT_AGENT_SNAPSHOT_INTERVAL_MS).toISOString();
+}
+
+function buildNextOpenTime(clock = getReportClock()) {
+  const [year, month, day] = clock.dateKey.split('-').map(Number);
+  const next = new Date(Date.UTC(year, month - 1, day, 0, 0, 0));
+  next.setUTCDate(next.getUTCDate() + 1);
+  return `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, '0')}-${String(next.getUTCDate()).padStart(2, '0')}T${String(REPORT_AGENT_OPEN_HOUR).padStart(2, '0')}:00:00`;
+}
+
 function readLatestDailyReportBundle() {
   const latestMeta = readLatestDailyReportMeta();
   if (!latestMeta?.jsonPath) return null;
@@ -933,6 +1061,19 @@ function readLatestDailyReportBundle() {
   } catch (error) {
     return null;
   }
+}
+
+function hydrateDailyReportStateFromDisk() {
+  const latestMeta = readLatestDailyReportMeta();
+  if (!latestMeta) return;
+
+  dailyReportState.lastGeneratedAt = latestMeta.generatedAt || dailyReportState.lastGeneratedAt;
+  dailyReportState.lastDateKey = latestMeta.dateKey || dailyReportState.lastDateKey;
+  dailyReportState.lastHtmlPath = latestMeta.htmlPath || dailyReportState.lastHtmlPath;
+  dailyReportState.lastStage = latestMeta.stage || dailyReportState.lastStage;
+  dailyReportState.agentMode = latestMeta.agentMode || dailyReportState.agentMode;
+  dailyReportState.latestAvailableDateKey = latestMeta.dateKey || dailyReportState.latestAvailableDateKey;
+  dailyReportState.latestAvailableStage = latestMeta.stage || dailyReportState.latestAvailableStage;
 }
 
 async function generateDailySalesReportBundle(options = {}) {
@@ -968,13 +1109,23 @@ async function generateDailySalesReportBundle(options = {}) {
         mode: options.mode || REPORT_AGENT_MODE,
         openAIApiKey: process.env.OPENAI_API_KEY || '',
         openAIModel: process.env.REPORT_AGENT_OPENAI_MODEL || REPORT_AGENT_OPENAI_MODEL,
+        stage: options.stage || 'snapshot',
+        trigger: options.trigger || 'manual',
+        storeState: options.storeState || null,
       });
 
       const meta = persistDailySalesReport(report, REPORTS_DIR);
+      cleanupOldDailyReports(REPORT_AGENT_HISTORY_DAYS);
       dailyReportState.lastGeneratedAt = report.generatedAt;
       dailyReportState.lastDateKey = report.dateKey;
       dailyReportState.lastHtmlPath = meta.htmlPath;
+      dailyReportState.lastStage = meta.stage;
       dailyReportState.agentMode = meta.agentMode;
+      dailyReportState.latestAvailableDateKey = meta.dateKey;
+      dailyReportState.latestAvailableStage = meta.stage;
+      dailyReportState.nextScheduledAt = meta.stage === 'final'
+        ? buildNextOpenTime(getReportClock())
+        : buildNextSnapshotDueAt(report.generatedAt);
 
       return {
         meta,
@@ -992,16 +1143,54 @@ async function generateDailySalesReportBundle(options = {}) {
   return dailyReportPromise;
 }
 
-function queueAutoDailyReportGeneration(reason = 'snapshot_reload') {
+function queueAutoDailyReportGeneration(reason = 'snapshot_reload', options = {}) {
   if (!AUTO_DAILY_REPORT_ENABLED || !cache.hasLiveData) return;
 
-  generateDailySalesReportBundle()
+  generateDailySalesReportBundle({
+    stage: options.stage || 'snapshot',
+    trigger: reason,
+    storeState: options.storeState || null,
+  })
     .then(result => {
-      console.log(`[Report Agent] Updated daily report for ${result.meta.dateKey} (${reason})`);
+      console.log(`[Report Agent] Updated ${result.meta.stage} daily report for ${result.meta.dateKey} (${reason})`);
     })
     .catch(error => {
       console.error(`[Report Agent] Failed to generate daily report (${reason}):`, error.message);
     });
+}
+
+function evaluateAutoDailyReportSchedule(reason = 'scheduler_tick') {
+  if (!AUTO_DAILY_REPORT_ENABLED || !cache.hasLiveData) return;
+  if (dailyReportState.running) return;
+
+  const clock = getReportClock();
+  const dateKey = cache.data?.ordersDateKey || clock.dateKey;
+  const reportIndex = readDailyReportIndex(dateKey);
+  const latestStage = reportIndex?.latestStage || null;
+  const latestGeneratedAt = reportIndex?.latestGeneratedAt || null;
+
+  dailyReportState.latestAvailableDateKey = reportIndex?.dateKey || dailyReportState.latestAvailableDateKey;
+  dailyReportState.latestAvailableStage = latestStage || dailyReportState.latestAvailableStage;
+
+  if (isReportStoreOpen(clock)) {
+    if (!latestGeneratedAt || latestStage === 'final') {
+      dailyReportState.nextScheduledAt = null;
+      queueAutoDailyReportGeneration(reason, { stage: 'snapshot', storeState: 'open' });
+      return;
+    }
+
+    const nextDueAt = buildNextSnapshotDueAt(latestGeneratedAt);
+    dailyReportState.nextScheduledAt = nextDueAt;
+    if (nextDueAt && Date.now() >= Date.parse(nextDueAt)) {
+      queueAutoDailyReportGeneration(reason, { stage: 'snapshot', storeState: 'open' });
+    }
+    return;
+  }
+
+  dailyReportState.nextScheduledAt = buildNextOpenTime(clock);
+  if (latestStage !== 'final') {
+    queueAutoDailyReportGeneration(reason, { stage: 'final', storeState: 'closed' });
+  }
 }
 
 function persistOrderDetail(key, detail) {
@@ -1661,25 +1850,15 @@ app.get('/api/data-context', (req, res) => {
 });
 
 app.get('/api/reports/daily/latest', async (req, res) => {
-  let bundle = readLatestDailyReportBundle();
-
-  if (!bundle && cache.hasLiveData) {
-    try {
-      bundle = await generateDailySalesReportBundle();
-    } catch (error) {
-      return res.status(500).json({
-        ok: false,
-        error: error.message || 'Failed to generate latest daily report',
-        state: dailyReportState,
-      });
-    }
-  }
+  const bundle = readLatestDailyReportBundle();
+  const history = buildDailyReportHistory();
 
   if (!bundle) {
     return res.status(404).json({
       ok: false,
-      error: 'No daily report available yet',
+      error: 'No cached daily report available yet',
       state: dailyReportState,
+      history,
     });
   }
 
@@ -1688,6 +1867,7 @@ app.get('/api/reports/daily/latest', async (req, res) => {
     state: dailyReportState,
     meta: bundle.meta,
     report: bundle.report,
+    history,
   });
 });
 
@@ -1696,20 +1876,37 @@ app.get('/api/reports/daily/status', (req, res) => {
     ok: true,
     state: dailyReportState,
     latest: readLatestDailyReportMeta(),
+    history: buildDailyReportHistory(),
+  });
+});
+
+app.get('/api/reports/daily/history', (req, res) => {
+  res.json({
+    ok: true,
+    history: buildDailyReportHistory(Number(req.query.limit) || REPORT_AGENT_HISTORY_DAYS),
   });
 });
 
 app.post('/api/reports/daily/generate', async (req, res) => {
   try {
+    const clock = getReportClock();
+    const requestedStage = String(req.body?.stage || '').trim().toLowerCase();
+    const stage = requestedStage === 'final'
+      ? 'final'
+      : (isReportStoreOpen(clock) ? 'snapshot' : 'final');
     const result = await generateDailySalesReportBundle({
       force: true,
       mode: req.body?.mode || REPORT_AGENT_MODE,
+      stage,
+      trigger: 'manual_api',
+      storeState: isReportStoreOpen(clock) ? 'open' : 'closed',
     });
     res.json({
       ok: true,
       state: dailyReportState,
       meta: result.meta,
       report: result.report,
+      history: buildDailyReportHistory(),
     });
   } catch (error) {
     res.status(500).json({
@@ -2180,9 +2377,10 @@ app.post('/api/scrape/run', (req, res) => {
 // ============================================================
 // START
 // ============================================================
+hydrateDailyReportStateFromDisk();
 const loaded = loadData();
 if (loaded && AUTO_DAILY_REPORT_ENABLED) {
-  queueAutoDailyReportGeneration('startup');
+  evaluateAutoDailyReportSchedule('startup');
 }
 
 if (AUTO_SYNC_ENABLED && ENABLE_BACKGROUND_JOBS) {
@@ -2201,6 +2399,10 @@ if (AUTO_SYNC_ENABLED && ENABLE_BACKGROUND_JOBS) {
       console.error('[Server] Auto sync failed:', error.message);
     });
   }, AUTO_FETCH_MS);
+
+  setInterval(() => {
+    evaluateAutoDailyReportSchedule('scheduler_tick');
+  }, REPORT_AGENT_SCHEDULER_TICK_MS);
 } else if (AUTO_SYNC_ENABLED && !ENABLE_BACKGROUND_JOBS) {
   console.log(`[Server] Background jobs disabled for ${DEPLOY_TARGET} mode. Auto sync timers will not run in-process.`);
 } else {
@@ -2212,7 +2414,7 @@ if (ENABLE_FILE_WATCH) {
     console.log('[Server] Snapshot changed — reloading...');
     if (loadData()) {
       applyCacheSyncStateToScrapeStatus();
-      queueAutoDailyReportGeneration('snapshot_reload');
+      evaluateAutoDailyReportSchedule('snapshot_reload');
     }
   });
 }

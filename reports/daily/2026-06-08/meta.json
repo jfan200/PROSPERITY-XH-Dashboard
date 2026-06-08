@@ -1,0 +1,15 @@
+{
+  "dateKey": "2026-06-08",
+  "latestStage": "final",
+  "latestGeneratedAt": "2026-06-08T13:25:34.194Z",
+  "latestJsonPath": "/reports/daily/2026-06-08/report.json",
+  "latestHtmlPath": "/reports/daily/2026-06-08/report.html",
+  "agentMode": "rules",
+  "snapshot": null,
+  "final": {
+    "generatedAt": "2026-06-08T13:25:34.194Z",
+    "jsonPath": "/reports/daily/2026-06-08/report.final.json",
+    "htmlPath": "/reports/daily/2026-06-08/report.final.html",
+    "agentMode": "rules"
+  }
+}

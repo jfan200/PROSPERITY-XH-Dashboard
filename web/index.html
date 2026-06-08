@@ -680,7 +680,7 @@
             </div>
             <div class="report-agent-actions">
               <a class="report-agent-link-btn" id="daily-report-open-link" href="#" target="_blank" rel="noreferrer">打开完整报告</a>
-              <button class="report-agent-generate-btn" id="daily-report-generate-btn" onclick="generateDailyReport()">立即生成今日日报</button>
+              <button class="report-agent-generate-btn" id="daily-report-generate-btn" onclick="generateDailyReport()">立即更新日报缓存</button>
             </div>
           </div>
           <div class="report-agent-status-row">
@@ -771,6 +771,18 @@
           </div>
           <div class="report-agent-preview" id="daily-report-preview">
             <div class="sales-empty-state" style="padding:28px">日报生成后会在这里预览</div>
+          </div>
+        </div>
+
+        <div class="chart-card">
+          <div class="chart-card-header">
+            <div>
+              <div class="chart-card-title">最近几天日报</div>
+              <div class="chart-card-sub">营业中保留最新 2 小时快照，打烊后切换为最终版</div>
+            </div>
+          </div>
+          <div class="report-agent-list" id="daily-report-history">
+            <div class="sales-empty-state" style="padding:20px">正在读取最近几天日报</div>
           </div>
         </div>
       </section>

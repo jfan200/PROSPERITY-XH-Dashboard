@@ -3137,6 +3137,41 @@ function renderReportAgentList(items = [], emptyText = '暂无内容') {
   `).join('');
 }
 
+function formatReportScheduleTime(value) {
+  if (!value) return '--';
+  return String(value).replace('T', ' ').slice(0, 16);
+}
+
+function renderDailyReportHistory(history = []) {
+  const normalized = Array.isArray(history) ? history.filter(Boolean) : [];
+  if (!normalized.length) {
+    return '<div class="sales-empty-state" style="padding:20px">最近几天还没有缓存日报</div>';
+  }
+
+  return normalized.map(item => {
+    const stageLabel = item.stage === 'final' ? '最终版' : '快照版';
+    const generatedAt = item.generatedAt ? formatReportScheduleTime(item.generatedAt) : '等待生成';
+    const link = item.htmlPath || '#';
+    const disabledClass = item.htmlPath ? '' : ' disabled';
+    const ariaDisabled = item.htmlPath ? 'false' : 'true';
+
+    return `
+      <div class="report-agent-list-card">
+        <div class="report-agent-list-copy">
+          <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap">
+            <strong>${escapeHtml(item.dateKey || '--')}</strong>
+            <span>${escapeHtml(stageLabel)} · ${escapeHtml(generatedAt)}</span>
+          </div>
+          <div style="margin-top:8px;display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap">
+            <span>${item.hasFinal ? '已含最终版' : '仅保留营业中快照'}</span>
+            <a class="report-agent-link-btn${disabledClass}" href="${escapeHtml(link)}" target="_blank" rel="noreferrer" aria-disabled="${ariaDisabled}">打开</a>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
 function renderDailyReportPage(payload) {
   const summaryGrid = document.getElementById('daily-report-summary-grid');
   const executive = document.getElementById('daily-report-executive');
@@ -3145,6 +3180,7 @@ function renderDailyReportPage(payload) {
   const questions = document.getElementById('daily-report-questions');
   const preview = document.getElementById('daily-report-preview');
   const openLink = document.getElementById('daily-report-open-link');
+  const historyEl = document.getElementById('daily-report-history');
 
   const report = payload?.report || null;
   const meta = payload?.meta || null;
@@ -3158,13 +3194,13 @@ function renderDailyReportPage(payload) {
   const heroSubEl = document.getElementById('daily-report-hero-sub');
 
   if (!report) {
-    if (statusEl) statusEl.textContent = dailyReportGenerating ? '生成中' : (dailyReportLoading ? '加载中' : '尚未生成');
-    if (statusSubEl) statusSubEl.textContent = state?.lastError || '生成后会自动显示今天的营业摘要和完整 HTML 报告。';
+    if (statusEl) statusEl.textContent = dailyReportGenerating ? '生成中' : (dailyReportLoading ? '加载中' : '等待缓存');
+    if (statusSubEl) statusSubEl.textContent = state?.lastError || `营业中每 2 小时自动更新一次，打烊后生成最终版。下次计划：${formatReportScheduleTime(state?.nextScheduledAt)}`;
     if (dateEl) dateEl.textContent = '--';
     if (generatedAtEl) generatedAtEl.textContent = '尚未生成';
     if (modeEl) modeEl.textContent = state?.agentMode || '--';
     if (htmlPathEl) htmlPathEl.textContent = '等待输出';
-    if (heroSubEl) heroSubEl.textContent = '每天自动分析营业额、订单数、客单价、热销菜品和异常点';
+    if (heroSubEl) heroSubEl.textContent = '营业中每 2 小时缓存一次日报，打烊后自动切换为最终版';
     if (summaryGrid) {
       summaryGrid.innerHTML = `
         <div class="report-agent-summary-card">
@@ -3179,6 +3215,7 @@ function renderDailyReportPage(payload) {
     if (findings) findings.innerHTML = renderReportAgentList([], '日报生成后会出现关键发现');
     if (questions) questions.innerHTML = renderReportAgentList([], '日报生成后会出现下一步问题');
     if (preview) preview.innerHTML = `<div class="sales-empty-state" style="padding:28px">${dailyReportGenerating ? '日报生成中，请稍候...' : '日报生成后会在这里预览'}</div>`;
+    if (historyEl) historyEl.innerHTML = renderDailyReportHistory(payload?.history || []);
     if (openLink) {
       openLink.href = '#';
       openLink.classList.add('disabled');
@@ -3191,14 +3228,20 @@ function renderDailyReportPage(payload) {
   const sameTimeRevenueDelta = Number(report?.comparison?.sameTime?.revenue?.delta || 0);
   const sameTimeAvgDelta = Number(report?.comparison?.sameTime?.avgTicket?.delta || 0);
   const topProduct = report?.products?.topRevenue?.[0] || null;
+  const stage = meta?.stage || report?.lifecycle?.stage || state?.lastStage || 'snapshot';
+  const stageLabel = stage === 'final' ? '最终版' : '快照版';
 
-  if (statusEl) statusEl.textContent = dailyReportGenerating ? '更新中' : '已生成';
-  if (statusSubEl) statusSubEl.textContent = state?.lastError || '数据更新后服务端会自动重算最新日报。';
+  if (statusEl) statusEl.textContent = dailyReportGenerating ? '更新中' : `${stageLabel}已生成`;
+  if (statusSubEl) statusSubEl.textContent = state?.lastError || (stage === 'final'
+    ? '今天已生成打烊最终版，明天营业后会继续按 2 小时更新快照。'
+    : `营业中缓存版，不会因打开页面而重算。下次计划：${formatReportScheduleTime(state?.nextScheduledAt)}`);
   if (dateEl) dateEl.textContent = report.dateKey || '--';
   if (generatedAtEl) generatedAtEl.textContent = report.generatedAt ? `生成于 ${report.generatedAt.replace('T', ' ').slice(0, 16)}` : '生成时间未知';
   if (modeEl) modeEl.textContent = report?.agent?.mode || meta?.agentMode || '--';
-  if (htmlPathEl) htmlPathEl.textContent = meta?.htmlPath || 'HTML 路径不可用';
-  if (heroSubEl) heroSubEl.textContent = `截至 ${report?.comparison?.sameTime?.cutoffTime || '--:--'} 的同时间对比、周内表现和菜品贡献都会自动整理进日报。`;
+  if (htmlPathEl) htmlPathEl.textContent = `${meta?.htmlPath || 'HTML 路径不可用'} · ${stageLabel}`;
+  if (heroSubEl) heroSubEl.textContent = stage === 'final'
+    ? '这是打烊后的最终版日报，适合直接发给老板或用于复盘'
+    : `这是营业中快照版，截至 ${report?.comparison?.sameTime?.cutoffTime || '--:--'} 自动整理同时间对比、周内表现和菜品贡献。`;
 
   if (summaryGrid) {
     summaryGrid.innerHTML = [
@@ -3245,6 +3288,7 @@ function renderDailyReportPage(payload) {
     openLink.classList.toggle('disabled', !meta?.htmlPath);
     openLink.setAttribute('aria-disabled', meta?.htmlPath ? 'false' : 'true');
   }
+  if (historyEl) historyEl.innerHTML = renderDailyReportHistory(payload?.history || []);
 }
 
 async function loadDailyReport(force = false) {
@@ -3315,7 +3359,7 @@ async function generateDailyReport() {
     dailyReportGenerating = false;
     if (button) {
       button.disabled = false;
-      button.textContent = '立即生成今日日报';
+      button.textContent = '立即更新日报缓存';
     }
   }
 }
