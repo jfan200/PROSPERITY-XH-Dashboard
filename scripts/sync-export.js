@@ -157,7 +157,7 @@ async function main() {
   if (args.products) {
     try {
       const prod = await fetchProductsExport(session, { start: startKey, end: endKey });
-      finalSnapshot = { ...finalSnapshot, productSales: prod.products, productSalesUpdatedAt: new Date().toISOString() };
+      finalSnapshot = { ...finalSnapshot, productSales: prod.products, productSalesRange: { start: startKey, end: endKey }, productSalesUpdatedAt: new Date().toISOString() };
       const totalQty = prod.products.reduce((s, p) => s + p.qtySold, 0);
       const totalProfit = prod.products.reduce((s, p) => s + p.profit, 0);
       console.log(`[export] 商品报表: ${prod.products.length} 个商品，销量 ${totalQty}，利润 $${totalProfit.toFixed(2)}`);

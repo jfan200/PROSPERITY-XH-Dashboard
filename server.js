@@ -15,6 +15,7 @@ const { createDailySalesReport, persistDailySalesReport } = require('./report-ag
 const readonlyGuard = require('./middleware/readonlyGuard');
 const apiKeyGuard = require('./middleware/apiKeyGuard');
 const { buildSalesOrdersV1Payload, resolveOrderScope, parseOrderRange } = require('./lib/api/salesOrders');
+const { buildSalesProductsV1Payload } = require('./lib/api/salesProducts');
 const {
   createSessionByLogin,
   fetchCoreDataWithSession,
@@ -1928,6 +1929,29 @@ app.get('/api/v1/sales/orders', (req, res) => {
     payload.meta.start = range.days[0];
     payload.meta.end = range.days[range.days.length - 1];
   }
+
+  return res.json(payload);
+});
+
+app.get('/api/v1/sales/products', (req, res) => {
+  const range = parseOrderRange({
+    date: req.query.date,
+    start: req.query.start,
+    end: req.query.end,
+  });
+  if (!range.ok) {
+    return res.status(400).json({ error: range.error });
+  }
+
+  const requested = range.days.length > 0
+    ? { start: range.days[0], end: range.days[range.days.length - 1] }
+    : null;
+
+  const payload = buildSalesProductsV1Payload({
+    products: cache.raw?.productSales || [],
+    range: cache.raw?.productSalesRange || null,
+    requested,
+  });
 
   return res.json(payload);
 });
