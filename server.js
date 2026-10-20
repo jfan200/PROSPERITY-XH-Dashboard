@@ -12,6 +12,8 @@ const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
 const { createDailySalesReport, persistDailySalesReport } = require('./report-agent');
+const readonlyGuard = require('./middleware/readonlyGuard');
+const apiKeyGuard = require('./middleware/apiKeyGuard');
 const {
   createSessionByLogin,
   fetchCoreDataWithSession,
@@ -104,6 +106,15 @@ async function configureFastify(server) {
 const fastify = Fastify({
   logger: false,
   bodyLimit: 10 * 1024 * 1024,
+});
+// Apply global read‑only guard to reject non‑GET methods (except health endpoints)
+fastify.addHook('onRequest', readonlyGuard);
+// Enforce API key for versioned read‑only endpoints
+fastify.addHook('preHandler', (req, reply, done) => {
+  if (req.raw.url.startsWith('/api/v1/')) {
+    return apiKeyGuard(req, reply, done);
+  }
+  done();
 });
 const fastifyReady = configureFastify(fastify);
 const app = createLegacyAppAdapter(fastify, fastifyReady);
@@ -1830,18 +1841,58 @@ app.get('/api/sales/hourly', (req, res) => {
 app.get('/api/sales/summary', (req, res) => {
   const d = cache.data;
   res.json({
-    hasLiveData: cache.hasLiveData,
-    storeName:    d.storeName,
-    brandName:    d.brandName,
-    ordersDateKey: d.ordersDateKey,
-    totalRevenue: d.totalRevenue,
-    totalOrders:  d.totalOrders,
-    avgTicket:    d.avgTicket,
-    payments:     d.payments,
-    weeklyOverview: d.weeklyOverview,
-    lastUpdated:  cache.lastUpdated,
-    scrapedAt:    d.scrapedAt,
-    products:     d.products,
+    meta: {
+      source: cache.hasLiveData ? 'taptouch_live' : 'cache',
+      fetchedAt: cache.lastUpdated,
+      integrity: {
+        ordersCount: d.totalOrders,
+        productCount: Array.isArray(d.products) ? d.products.length : 0,
+        coverage: cache.hasLiveData ? 'full' : 'partial',
+      },
+    },
+    data: {
+      hasLiveData: cache.hasLiveData,
+      storeName:    d.storeName,
+      brandName:    d.brandName,
+      ordersDateKey: d.ordersDateKey,
+      totalRevenue: d.totalRevenue,
+      totalOrders:  d.totalOrders,
+      avgTicket:    d.avgTicket,
+      payments:     d.payments,
+      weeklyOverview: d.weeklyOverview,
+      lastUpdated:  cache.lastUpdated,
+      scrapedAt:    d.scrapedAt,
+      products:     d.products,
+    },
+  });
+});
+app.get('/api/v1/sales/summary', (req, res) => {
+  const d = cache.data;
+  res.json({
+    meta: {
+      source: cache.hasLiveData ? 'taptouch_live' : 'cache',
+      fetchedAt: cache.lastUpdated,
+      integrity: {
+        ordersCount: d.totalOrders,
+        productCount: Array.isArray(d.products) ? d.products.length : 0,
+        coverage: cache.hasLiveData ? 'full' : 'partial',
+      },
+    },
+    data: {
+      totalRevenue: d.totalRevenue,
+      totalOrders: d.totalOrders,
+      avgTicket: d.avgTicket,
+    },
+  });
+});
+
+app.get('/api/v1/sales/hourly', (req, res) => {
+  res.json({
+    meta: {
+      source: cache.hasLiveData ? 'taptouch_live' : 'cache',
+      fetchedAt: cache.lastUpdated,
+    },
+    data: cache.data.hourlySales,
   });
 });
 
@@ -2419,8 +2470,14 @@ if (ENABLE_FILE_WATCH) {
   });
 }
 
-app.listen(PORT, () => {
-  console.log(`\n🍜  PROSPERITY XH Dashboard Server`);
-  console.log(`    Dashboard: http://localhost:${PORT}`);
-  console.log(`    Data:      ${loaded ? `✅ TapTouch 真实数据 ($${cache.data?.totalRevenue})` : '⭕ 初始为空，等待 TapTouch 同步'}\n`);
-});
+if (require.main === module) {
+  // Only start the server when this file is executed directly
+  app.listen(PORT, () => {
+    console.log(`\n🍜  PROSPERITY XH Dashboard Server`);
+    console.log(`    Dashboard: http://localhost:${PORT}`);
+    console.log(`    Data:      ${loaded ? `✅ TapTouch 真实数据 ($${cache.data?.totalRevenue})` : '⭕ 初始为空，等待 TapTouch 同步'}\n`);
+  });
+}
+
+// Export the Fastify app for testing and external integration
+module.exports = { app, fastify };
