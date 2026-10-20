@@ -176,6 +176,9 @@ assert(compactReceipt.items[0].note.includes('不辣'), 'compact receipt preserv
 assertEqual(compactReceipt.totals.subtotal, 33.6, 'compact receipt subtotal is 33.6');
 assertEqual(compactReceipt.totals.totalPaid, 33.6, 'compact receipt totalPaid is 33.6');
 
+// DSH read-only API: /api/v1/sales/orders payload contract.
+require('./dsh/sales-orders.test')({ assert, assertEqual });
+
 console.log('\n=== Results ===\n');
 console.log(`Passed: ${passed}`);
 console.log(`Failed: ${failed}`);

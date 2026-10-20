@@ -14,6 +14,7 @@ const { spawn } = require('child_process');
 const { createDailySalesReport, persistDailySalesReport } = require('./report-agent');
 const readonlyGuard = require('./middleware/readonlyGuard');
 const apiKeyGuard = require('./middleware/apiKeyGuard');
+const { buildSalesOrdersV1Payload, resolveOrderScope } = require('./lib/api/salesOrders');
 const {
   createSessionByLogin,
   fetchCoreDataWithSession,
@@ -1894,6 +1895,34 @@ app.get('/api/v1/sales/hourly', (req, res) => {
     },
     data: cache.data.hourlySales,
   });
+});
+
+app.get('/api/v1/sales/orders', (req, res) => {
+  const date = String(req.query.date || '').trim();
+  if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return res.status(400).json({
+      error: { code: 'INVALID_DATE', message: 'date must be YYYY-MM-DD' },
+    });
+  }
+
+  const todayKey = cache.data?.ordersDateKey || getTodayDateKey();
+  const scope = resolveOrderScope(cache, { date }, todayKey);
+  const orderDetails = cache.raw?.orderDetails || cache.data?.orderDetails || {};
+  // Reuse the shared mapper so headers and summary-row filtering stay identical
+  // to every other orders surface; this endpoint adds only items, paging and integrity.
+  const orders = mapRawOrdersToApiOrders(scope.orders, orderDetails);
+
+  const payload = buildSalesOrdersV1Payload({
+    orders,
+    orderDetails,
+    meta: { source: scope.source, fetchedAt: scope.fetchedAt },
+    page: Number(req.query.page || 1),
+    limit: req.query.limit === undefined ? undefined : Number(req.query.limit),
+    parseMoney: parseMoneyValue,
+  });
+  payload.meta.dateKey = scope.dateKey;
+
+  return res.json(payload);
 });
 
 app.get('/api/data-context', (req, res) => {
