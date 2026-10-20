@@ -12,6 +12,10 @@ const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
 const { createDailySalesReport, persistDailySalesReport } = require('./report-agent');
+const readonlyGuard = require('./middleware/readonlyGuard');
+const apiKeyGuard = require('./middleware/apiKeyGuard');
+const { buildSalesOrdersV1Payload, resolveOrderScope, parseOrderRange } = require('./lib/api/salesOrders');
+const { buildSalesProductsV1Payload } = require('./lib/api/salesProducts');
 const {
   createSessionByLogin,
   fetchCoreDataWithSession,
@@ -104,6 +108,15 @@ async function configureFastify(server) {
 const fastify = Fastify({
   logger: false,
   bodyLimit: 10 * 1024 * 1024,
+});
+// Apply global read‑only guard to reject non‑GET methods (except health endpoints)
+fastify.addHook('onRequest', readonlyGuard);
+// Enforce API key for versioned read‑only endpoints
+fastify.addHook('preHandler', (req, reply, done) => {
+  if (req.raw.url.startsWith('/api/v1/')) {
+    return apiKeyGuard(req, reply, done);
+  }
+  done();
 });
 const fastifyReady = configureFastify(fastify);
 const app = createLegacyAppAdapter(fastify, fastifyReady);
@@ -1830,19 +1843,117 @@ app.get('/api/sales/hourly', (req, res) => {
 app.get('/api/sales/summary', (req, res) => {
   const d = cache.data;
   res.json({
-    hasLiveData: cache.hasLiveData,
-    storeName:    d.storeName,
-    brandName:    d.brandName,
-    ordersDateKey: d.ordersDateKey,
-    totalRevenue: d.totalRevenue,
-    totalOrders:  d.totalOrders,
-    avgTicket:    d.avgTicket,
-    payments:     d.payments,
-    weeklyOverview: d.weeklyOverview,
-    lastUpdated:  cache.lastUpdated,
-    scrapedAt:    d.scrapedAt,
-    products:     d.products,
+    meta: {
+      source: cache.hasLiveData ? 'taptouch_live' : 'cache',
+      fetchedAt: cache.lastUpdated,
+      integrity: {
+        ordersCount: d.totalOrders,
+        productCount: Array.isArray(d.products) ? d.products.length : 0,
+        coverage: cache.hasLiveData ? 'full' : 'partial',
+      },
+    },
+    data: {
+      hasLiveData: cache.hasLiveData,
+      storeName:    d.storeName,
+      brandName:    d.brandName,
+      ordersDateKey: d.ordersDateKey,
+      totalRevenue: d.totalRevenue,
+      totalOrders:  d.totalOrders,
+      avgTicket:    d.avgTicket,
+      payments:     d.payments,
+      weeklyOverview: d.weeklyOverview,
+      lastUpdated:  cache.lastUpdated,
+      scrapedAt:    d.scrapedAt,
+      products:     d.products,
+    },
   });
+});
+app.get('/api/v1/sales/summary', (req, res) => {
+  const d = cache.data;
+  res.json({
+    meta: {
+      source: cache.hasLiveData ? 'taptouch_live' : 'cache',
+      fetchedAt: cache.lastUpdated,
+      integrity: {
+        ordersCount: d.totalOrders,
+        productCount: Array.isArray(d.products) ? d.products.length : 0,
+        coverage: cache.hasLiveData ? 'full' : 'partial',
+      },
+    },
+    data: {
+      totalRevenue: d.totalRevenue,
+      totalOrders: d.totalOrders,
+      avgTicket: d.avgTicket,
+    },
+  });
+});
+
+app.get('/api/v1/sales/hourly', (req, res) => {
+  res.json({
+    meta: {
+      source: cache.hasLiveData ? 'taptouch_live' : 'cache',
+      fetchedAt: cache.lastUpdated,
+    },
+    data: cache.data.hourlySales,
+  });
+});
+
+app.get('/api/v1/sales/orders', (req, res) => {
+  const range = parseOrderRange({
+    date: req.query.date,
+    start: req.query.start,
+    end: req.query.end,
+  });
+  if (!range.ok) {
+    return res.status(400).json({ error: range.error });
+  }
+
+  const todayKey = cache.data?.ordersDateKey || getTodayDateKey();
+  const scope = resolveOrderScope(cache, { days: range.days }, todayKey);
+  const orderDetails = cache.raw?.orderDetails || cache.data?.orderDetails || {};
+  // Reuse the shared mapper so headers and summary-row filtering stay identical
+  // to every other orders surface; this endpoint adds only items, paging and integrity.
+  const orders = mapRawOrdersToApiOrders(scope.orders, orderDetails);
+
+  const payload = buildSalesOrdersV1Payload({
+    orders,
+    orderDetails,
+    meta: { source: scope.source, fetchedAt: scope.fetchedAt },
+    page: Number(req.query.page || 1),
+    limit: req.query.limit === undefined ? undefined : Number(req.query.limit),
+    coverage: scope.coverage,
+    parseMoney: parseMoneyValue,
+  });
+  payload.meta.dateKey = scope.dateKey;
+  if (range.mode === 'range') {
+    payload.meta.start = range.days[0];
+    payload.meta.end = range.days[range.days.length - 1];
+  }
+
+  return res.json(payload);
+});
+
+app.get('/api/v1/sales/products', (req, res) => {
+  const range = parseOrderRange({
+    date: req.query.date,
+    start: req.query.start,
+    end: req.query.end,
+  });
+  if (!range.ok) {
+    return res.status(400).json({ error: range.error });
+  }
+
+  const requested = range.days.length > 0
+    ? { start: range.days[0], end: range.days[range.days.length - 1] }
+    : null;
+
+  const payload = buildSalesProductsV1Payload({
+    products: cache.raw?.productSales || [],
+    range: cache.raw?.productSalesRange || null,
+    requested,
+  });
+
+  return res.json(payload);
 });
 
 app.get('/api/data-context', (req, res) => {
@@ -2419,8 +2530,14 @@ if (ENABLE_FILE_WATCH) {
   });
 }
 
-app.listen(PORT, () => {
-  console.log(`\n🍜  PROSPERITY XH Dashboard Server`);
-  console.log(`    Dashboard: http://localhost:${PORT}`);
-  console.log(`    Data:      ${loaded ? `✅ TapTouch 真实数据 ($${cache.data?.totalRevenue})` : '⭕ 初始为空，等待 TapTouch 同步'}\n`);
-});
+if (require.main === module) {
+  // Only start the server when this file is executed directly
+  app.listen(PORT, () => {
+    console.log(`\n🍜  PROSPERITY XH Dashboard Server`);
+    console.log(`    Dashboard: http://localhost:${PORT}`);
+    console.log(`    Data:      ${loaded ? `✅ TapTouch 真实数据 ($${cache.data?.totalRevenue})` : '⭕ 初始为空，等待 TapTouch 同步'}\n`);
+  });
+}
+
+// Export the Fastify app for testing and external integration
+module.exports = { app, fastify };
