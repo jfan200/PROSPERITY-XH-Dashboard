@@ -11,6 +11,8 @@
  *   node scripts/sync-export.js --days 7        # last 7 days incl. today
  *   node scripts/sync-export.js --dry-run       # report, write nothing
  *   node scripts/sync-export.js --snapshot /path/to/scrape-result.json
+ *   node scripts/sync-export.js --days 7 --details          # also backfill line items
+ *   node scripts/sync-export.js --details --detail-max 50   # bounded batch
  *
  * Credentials are read from .env.local (TAPTOUCH_EMAIL / TAPTOUCH_PASSWORD).
  * Nothing is printed that could leak them.
@@ -27,15 +29,31 @@ const {
   loginForCookie,
   fetchOrdersExport,
   mergeOrdersIntoSnapshot,
+  selectOrdersNeedingDetails,
+  mapWithConcurrency,
+  mergeDetailsIntoSnapshot,
 } = require(path.join(APP_ROOT, 'lib/adapters/taptouch-export'));
+const { fetchSingleOrderDetailWithSession } = require(path.join(APP_ROOT, 'scraper.js'));
 
 const BASE = process.env.TAPTOUCH_BASE_URL || 'https://backoffice.taptouch.net';
 
 function parseArgs(argv) {
-  const args = { days: 1, dryRun: false, snapshot: path.join(APP_ROOT, 'data', 'scrape-result.json') };
+  const args = {
+    days: 1,
+    dryRun: false,
+    details: false,
+    detailMax: 0,
+    detailConcurrency: 4,
+    forceDetails: false,
+    snapshot: path.join(APP_ROOT, 'data', 'scrape-result.json'),
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--dry-run') args.dryRun = true;
+    else if (arg === '--details') args.details = true;
+    else if (arg === '--force-details') { args.details = true; args.forceDetails = true; }
+    else if (arg === '--detail-max') args.detailMax = Math.max(0, Number(argv[++i]) || 0);
+    else if (arg === '--detail-concurrency') args.detailConcurrency = Math.max(1, Number(argv[++i]) || 4);
     else if (arg === '--days') args.days = Math.max(1, Number(argv[++i]) || 1);
     else if (arg === '--snapshot') args.snapshot = argv[++i];
     else if (arg === '--help') {
@@ -103,12 +121,42 @@ async function main() {
   console.log(`[export] allOrders: ${(snapshot.allOrders || []).length} -> ${merged.allOrders.length}`);
   console.log(`[export] ordersByDate 天数: ${Object.keys(snapshot.ordersByDate || {}).length} -> ${Object.keys(merged.ordersByDate).length}`);
 
+  let finalSnapshot = merged;
+  if (args.details) {
+    const missing = selectOrdersNeedingDetails(result.orders, merged.orderDetails, { force: args.forceDetails });
+    const todo = args.detailMax > 0 ? missing.slice(0, args.detailMax) : missing;
+    console.log(`[export] 缺明细 ${missing.length} 单，本次抓取 ${todo.length} 单（并发 ${args.detailConcurrency}）`);
+
+    if (todo.length > 0) {
+      const started = Date.now();
+      let done = 0;
+      const outcome = await mapWithConcurrency(todo, args.detailConcurrency, async (order) => {
+        const detail = await fetchSingleOrderDetailWithSession(
+          { cookieHeader: session.cookieHeader },
+          { txId: order.txId, id: order.id, amount: order.amount },
+        );
+        if (!detail) throw new Error('empty detail');
+        done += 1;
+        if (done % 20 === 0) console.log(`[export]   已抓 ${done}/${todo.length}`);
+        return detail;
+      });
+
+      const fetched = outcome.ok.map((entry) => ({ txId: entry.item.txId, detail: entry.result }));
+      finalSnapshot = mergeDetailsIntoSnapshot(merged, fetched, { now: new Date().toISOString() });
+      console.log(`[export] 明细成功 ${outcome.ok.length}，失败 ${outcome.failed.length}，耗时 ${((Date.now() - started) / 1000).toFixed(1)}s`);
+      if (outcome.failed.length > 0) {
+        console.log(`[export]   失败示例: ${outcome.failed[0].error}`);
+      }
+      console.log(`[export] orderDetails: ${Object.keys(merged.orderDetails || {}).length} -> ${Object.keys(finalSnapshot.orderDetails).length}`);
+    }
+  }
+
   if (args.dryRun) {
     console.log('[export] --dry-run，不写入');
     return;
   }
 
-  fs.writeFileSync(args.snapshot, `${JSON.stringify(merged, null, 2)}\n`, 'utf8');
+  fs.writeFileSync(args.snapshot, `${JSON.stringify(finalSnapshot, null, 2)}\n`, 'utf8');
   console.log(`[export] 已写入 ${args.snapshot}`);
   console.log('[export] server.js 检测到文件变化会自动重载');
 }

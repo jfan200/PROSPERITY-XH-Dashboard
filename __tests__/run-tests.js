@@ -182,6 +182,7 @@ const dshRegistrations = [
   require('./dsh/sales-orders-range.test'),
   require('./dsh/taptouch-export.test'),
   require('./dsh/taptouch-fetch.test'),
+  require('./dsh/order-details.test'),
   require('./dsh/snapshot-merge.test'),
 ];
 
