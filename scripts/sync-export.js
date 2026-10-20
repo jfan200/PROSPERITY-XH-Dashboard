@@ -32,6 +32,7 @@ const {
   selectOrdersNeedingDetails,
   mapWithConcurrency,
   mergeDetailsIntoSnapshot,
+  fetchProductsExport,
 } = require(path.join(APP_ROOT, 'lib/adapters/taptouch-export'));
 const { fetchSingleOrderDetailWithSession } = require(path.join(APP_ROOT, 'scraper.js'));
 
@@ -45,12 +46,14 @@ function parseArgs(argv) {
     detailMax: 0,
     detailConcurrency: 4,
     forceDetails: false,
+    products: false,
     snapshot: path.join(APP_ROOT, 'data', 'scrape-result.json'),
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--dry-run') args.dryRun = true;
     else if (arg === '--details') args.details = true;
+    else if (arg === '--products') args.products = true;
     else if (arg === '--force-details') { args.details = true; args.forceDetails = true; }
     else if (arg === '--detail-max') args.detailMax = Math.max(0, Number(argv[++i]) || 0);
     else if (arg === '--detail-concurrency') args.detailConcurrency = Math.max(1, Number(argv[++i]) || 4);
@@ -148,6 +151,19 @@ async function main() {
         console.log(`[export]   失败示例: ${outcome.failed[0].error}`);
       }
       console.log(`[export] orderDetails: ${Object.keys(merged.orderDetails || {}).length} -> ${Object.keys(finalSnapshot.orderDetails).length}`);
+    }
+  }
+
+  if (args.products) {
+    try {
+      const prod = await fetchProductsExport(session, { start: startKey, end: endKey });
+      finalSnapshot = { ...finalSnapshot, productSales: prod.products, productSalesUpdatedAt: new Date().toISOString() };
+      const totalQty = prod.products.reduce((s, p) => s + p.qtySold, 0);
+      const totalProfit = prod.products.reduce((s, p) => s + p.profit, 0);
+      console.log(`[export] 商品报表: ${prod.products.length} 个商品，销量 ${totalQty}，利润 $${totalProfit.toFixed(2)}`);
+      prod.products.slice(0, 3).forEach((p) => console.log(`[export]   ${p.name.slice(0, 28)}  x${p.qtySold}  利润 $${p.profit}`));
+    } catch (error) {
+      console.error('[export] 商品报表失败（不影响订单写入）:', error.message);
     }
   }
 
