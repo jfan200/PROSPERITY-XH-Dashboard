@@ -177,14 +177,26 @@ assertEqual(compactReceipt.totals.subtotal, 33.6, 'compact receipt subtotal is 3
 assertEqual(compactReceipt.totals.totalPaid, 33.6, 'compact receipt totalPaid is 33.6');
 
 // DSH read-only API: /api/v1/sales/orders payload contract.
-require('./dsh/sales-orders.test')({ assert, assertEqual });
-require('./dsh/sales-orders-range.test')({ assert, assertEqual });
+const dshRegistrations = [
+  require('./dsh/sales-orders.test'),
+  require('./dsh/sales-orders-range.test'),
+  require('./dsh/taptouch-export.test'),
+];
 
-console.log('\n=== Results ===\n');
-console.log(`Passed: ${passed}`);
-console.log(`Failed: ${failed}`);
-console.log(`Total: ${passed + failed}`);
+(async () => {
+  for (const register of dshRegistrations) {
+    await register({ assert, assertEqual });
+  }
 
-if (failed > 0) {
+  console.log('\n=== Results ===\n');
+  console.log(`Passed: ${passed}`);
+  console.log(`Failed: ${failed}`);
+  console.log(`Total: ${passed + failed}`);
+
+  if (failed > 0) {
+    process.exit(1);
+  }
+})().catch((error) => {
+  console.error('测试执行失败:', (error && error.message) || error);
   process.exit(1);
-}
+});
