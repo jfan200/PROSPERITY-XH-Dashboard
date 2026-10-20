@@ -178,6 +178,7 @@ assertEqual(compactReceipt.totals.totalPaid, 33.6, 'compact receipt totalPaid is
 
 // DSH read-only API: /api/v1/sales/orders payload contract.
 require('./dsh/sales-orders.test')({ assert, assertEqual });
+require('./dsh/sales-orders-range.test')({ assert, assertEqual });
 
 console.log('\n=== Results ===\n');
 console.log(`Passed: ${passed}`);
